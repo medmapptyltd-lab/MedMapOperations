@@ -5,10 +5,26 @@ const supabaseUrl = import.meta.env.VITE_SUPABASE_URL?.trim();
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY?.trim();
 
 function isPlaceholder(value: string | undefined) {
-  return !value || value.startsWith("__") || value.endsWith("__");
+  return (
+    !value ||
+    value.startsWith("__") ||
+    value.endsWith("__") ||
+    value.startsWith("PLACEHOLDER_")
+  );
 }
 
-export const supabaseConfigured = !isPlaceholder(supabaseUrl) && !isPlaceholder(supabaseAnonKey);
+function isValidSupabaseUrl(value: string | undefined) {
+  if (isPlaceholder(value)) return false;
+  try {
+    const url = new URL(value!);
+    return url.protocol === "http:" || url.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+export const supabaseConfigured =
+  isValidSupabaseUrl(supabaseUrl) && !isPlaceholder(supabaseAnonKey);
 
 if (import.meta.env.DEV && !supabaseConfigured) {
   console.error(
