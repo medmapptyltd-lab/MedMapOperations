@@ -2,13 +2,16 @@ import { Link } from "react-router-dom";
 import {
   ArrowDownRight,
   ArrowUpRight,
+  Boxes,
   CalendarDays,
   ChevronRight,
   CircleAlert,
   Clock3,
   FileWarning,
+  GitBranch,
   Layers3,
   Plus,
+  ShieldCheck,
   Sparkles,
   Target,
   UsersRound,
@@ -33,6 +36,10 @@ import {
   type Task,
   type Ticket,
 } from "@/lib/executive-dashboard";
+import {
+  useProductEngineeringDashboard,
+  type ProductEngineeringDashboardData,
+} from "@/lib/product-engineering-dashboard";
 
 type Status = "healthy" | "attention" | "critical";
 type WorkRecord = Task | Ticket;
@@ -198,6 +205,136 @@ function RecordState({
   return <>{children}</>;
 }
 
+type ExecutiveArea = {
+  title: string;
+  description: string;
+  path: string;
+  icon: React.ElementType;
+  metrics: { label: string; value: number }[];
+  state: "loading" | "error" | "empty" | "live";
+};
+
+type ExecutiveActivity = {
+  id: string;
+  area: "Product" | "Engineering" | "Security";
+  label: string;
+  timestamp: string;
+};
+
+function areaState(
+  isPending: boolean,
+  hasError: boolean,
+  metrics: { value: number }[],
+): ExecutiveArea["state"] {
+  if (isPending) return "loading";
+  if (hasError) return "error";
+  return metrics.some((metric) => metric.value > 0) ? "live" : "empty";
+}
+
+function buildRecentActivity(
+  data: ProductEngineeringDashboardData,
+): ExecutiveActivity[] {
+  return [
+    ...data.releases.map((release) => ({
+      id: `release-${release.id}`,
+      area: "Product" as const,
+      label: `Release · ${release.name}`,
+      timestamp: release.updated_at || release.created_at,
+    })),
+    ...data.deployments.map((deployment) => ({
+      id: `deployment-${deployment.id}`,
+      area: "Engineering" as const,
+      label: `Deployment · ${deployment.version || deployment.id}`,
+      timestamp:
+        deployment.deployment_completed_at ||
+        deployment.deployment_started_at ||
+        deployment.updated_at,
+    })),
+    ...data.projects.map((project) => ({
+      id: `project-${project.id}`,
+      area: "Engineering" as const,
+      label: `Project · ${project.name}`,
+      timestamp: project.updated_at || project.created_at,
+    })),
+    ...data.feedback.map((feedback) => ({
+      id: `feedback-${feedback.id}`,
+      area: "Product" as const,
+      label: `Feedback · ${feedback.title || feedback.id}`,
+      timestamp: feedback.updated_at || feedback.created_at,
+    })),
+    ...data.controls
+      .filter((control) => control.last_reviewed_at)
+      .map((control) => ({
+        id: `control-${control.id}`,
+        area: "Security" as const,
+        label: `Control reviewed · ${control.name}`,
+        timestamp: control.last_reviewed_at!,
+      })),
+  ]
+    .filter((activity) => !Number.isNaN(new Date(activity.timestamp).valueOf()))
+    .sort((a, b) => b.timestamp.localeCompare(a.timestamp))
+    .slice(0, 6);
+}
+
+function ExecutiveAreaCard({ area }: { area: ExecutiveArea }) {
+  const Icon = area.icon;
+  const stateLabel =
+    area.state === "loading"
+      ? "Loading executive data..."
+      : area.state === "error"
+        ? "Unable to load executive data."
+        : area.state === "empty"
+          ? "No operational data recorded."
+          : "Live records available.";
+  const stateClass =
+    area.state === "error"
+      ? "text-[#bd504d]"
+      : area.state === "empty"
+        ? "text-slate-400"
+        : "text-[#1f9d80]";
+
+  return (
+    <article className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-[0_5px_20px_rgba(21,36,58,0.035)] sm:p-6">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <div className="flex items-center gap-2">
+            <span className="grid size-8 place-items-center rounded-lg bg-[#eaf3ff] text-[#4a87c9]">
+              <Icon size={16} />
+            </span>
+            <h3 className="font-display text-[16px] font-bold text-[#152239]">
+              {area.title}
+            </h3>
+          </div>
+          <p className="mt-2 text-[11px] leading-5 text-slate-400">
+            {area.description}
+          </p>
+        </div>
+      </div>
+      <div className="mt-5 grid grid-cols-2 gap-2">
+        {area.metrics.map((metric) => (
+          <div key={metric.label} className="rounded-xl bg-[#f7f9fb] p-3">
+            <p className="text-[10px] font-medium text-slate-400">
+              {metric.label}
+            </p>
+            <p className="mt-2 font-display text-[22px] font-bold text-[#152239]">
+              {area.state === "loading" ? "..." : area.state === "error" ? "—" : metric.value}
+            </p>
+          </div>
+        ))}
+      </div>
+      <p className={cn("mt-4 text-[10px] font-semibold", stateClass)}>
+        {stateLabel}
+      </p>
+      <Link
+        to={area.path}
+        className="mt-4 inline-flex items-center gap-1 text-[10px] font-bold text-[#1c9574]"
+      >
+        Open {area.title} Command Centre <ChevronRight size={13} />
+      </Link>
+    </article>
+  );
+}
+
 function WorkSummary({ records }: { records: WorkRecord[] }) {
   const open = records.filter(
     (record) => !isResolvedStatus(record.status),
@@ -220,6 +357,7 @@ export default function Index() {
   const organisationState = useCurrentOrganisation();
   const { people, operations, kpis, finance } = useExecutiveSummary();
   const alerts = useExecutiveAlerts();
+  const technologyDashboard = useProductEngineeringDashboard();
   const organisationName = formatOrganisationName(
     organisationState.organization,
   );
@@ -252,6 +390,55 @@ export default function Index() {
     : operations.isError
       ? "Unavailable"
       : String(workSummary.open);
+  const technologyData = technologyDashboard.data;
+  const technologyError =
+    technologyDashboard.isError || Boolean(technologyData?.optionalErrors.length);
+  const productMetrics = [
+    { label: "Roadmaps", value: technologyData?.roadmaps.length ?? 0 },
+    { label: "Backlog", value: technologyData?.items.length ?? 0 },
+    { label: "Releases", value: technologyData?.releases.length ?? 0 },
+    { label: "Feedback", value: technologyData?.feedback.length ?? 0 },
+  ];
+  const engineeringMetrics = [
+    { label: "Projects", value: technologyData?.projects.length ?? 0 },
+    { label: "Deployments", value: technologyData?.deployments.length ?? 0 },
+    { label: "Releases", value: technologyData?.releases.length ?? 0 },
+    { label: "Work links", value: technologyData ? technologyData.tasks.length + technologyData.tickets.length : 0 },
+  ];
+  const securityMetrics = [
+    { label: "Controls", value: technologyData?.controls.length ?? 0 },
+    { label: "Tests", value: technologyData?.securityTests.length ?? 0 },
+    { label: "Findings", value: technologyData?.findings.length ?? 0 },
+    { label: "Incidents", value: technologyData?.incidents.length ?? 0 },
+    { label: "Remediations", value: technologyData?.remediations.length ?? 0 },
+  ];
+  const executiveAreas: ExecutiveArea[] = [
+    {
+      title: "Product",
+      description: "Roadmaps, backlog, releases and feedback from the live organisation scope.",
+      path: "/product",
+      icon: Boxes,
+      metrics: productMetrics,
+      state: areaState(technologyDashboard.isPending, technologyError, productMetrics),
+    },
+    {
+      title: "Engineering",
+      description: "Projects, deployments and linked operational work from the live backend.",
+      path: "/engineering",
+      icon: GitBranch,
+      metrics: engineeringMetrics,
+      state: areaState(technologyDashboard.isPending, technologyError, engineeringMetrics),
+    },
+    {
+      title: "Security",
+      description: "Controls, tests, findings, incidents and remediation records only.",
+      path: "/security",
+      icon: ShieldCheck,
+      metrics: securityMetrics,
+      state: areaState(technologyDashboard.isPending, technologyError, securityMetrics),
+    },
+  ];
+  const recentActivity = technologyData ? buildRecentActivity(technologyData) : [];
   const metrics: Metric[] = [
     {
       label: "Recorded revenue",
@@ -769,6 +956,24 @@ export default function Index() {
           </RecordState>
         </section>
 
+        <section className="mt-5 rounded-2xl border border-[#c9d7ec] bg-[#f7faff] p-5 shadow-[0_5px_20px_rgba(21,36,58,0.035)] sm:p-6">
+          <div className="flex flex-col justify-between gap-3 md:flex-row md:items-center">
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="grid size-8 place-items-center rounded-lg bg-[#eaf3ff] text-[#4a87c9]"><Layers3 size={16} /></span>
+                <h2 className="font-display text-[16px] font-bold text-[#152239]">CEO technology integration</h2>
+              </div>
+              <p className="mt-2 text-[11px] leading-5 text-slate-400">A concise executive aggregation of the live Product, Engineering and Security command centres.</p>
+            </div>
+            <span className="text-[10px] font-semibold text-slate-400">Organisation-scoped · RLS enforced</span>
+          </div>
+          <div className="mt-5 grid gap-3 lg:grid-cols-3">
+            {executiveAreas.map((area) => (
+              <ExecutiveAreaCard key={area.title} area={area} />
+            ))}
+          </div>
+        </section>
+
         <section className="mt-5 rounded-2xl border border-slate-200/80 bg-white p-5 shadow-[0_5px_20px_rgba(21,36,58,0.035)] sm:p-6">
           <div className="flex flex-col justify-between gap-3 md:flex-row md:items-center">
             <div>
@@ -784,6 +989,35 @@ export default function Index() {
             <Link to="/engineering" className="rounded-xl border border-slate-100 bg-[#f7f9fb] p-4 transition hover:border-[#bfe9da] hover:bg-[#f2fcf8]"><p className="text-[11px] font-bold text-slate-700">Engineering</p><p className="mt-1 text-[10px] leading-5 text-slate-400">Projects, operational links and deployments.</p><span className="mt-3 inline-flex items-center gap-1 text-[10px] font-bold text-[#1c9574]">Open Engineering <ChevronRight size={13} /></span></Link>
             <Link to="/security" className="rounded-xl border border-slate-100 bg-[#f7f9fb] p-4 transition hover:border-[#bfe9da] hover:bg-[#f2fcf8]"><p className="text-[11px] font-bold text-slate-700">Security</p><p className="mt-1 text-[10px] leading-5 text-slate-400">Controls, tests, findings and remediation.</p><span className="mt-3 inline-flex items-center gap-1 text-[10px] font-bold text-[#1c9574]">Open Security <ChevronRight size={13} /></span></Link>
           </div>
+        </section>
+
+        <section className="mt-5 rounded-2xl border border-slate-200/80 bg-white p-5 shadow-[0_5px_20px_rgba(21,36,58,0.035)] sm:p-6">
+          <div className="flex items-center gap-2">
+            <span className="grid size-8 place-items-center rounded-lg bg-[#e8f8f2] text-[#1b9975]"><Clock3 size={16} /></span>
+            <div>
+              <h2 className="font-display text-[16px] font-bold text-[#152239]">Recent operational activity</h2>
+              <p className="mt-1 text-[11px] text-slate-400">Recent records with reliable timestamps from the authenticated organisation scope.</p>
+            </div>
+          </div>
+          {technologyDashboard.isPending ? (
+            <div className="mt-4"><LoadingState /></div>
+          ) : technologyError ? (
+            <div className="mt-4"><ErrorState message="Unable to load executive data." /></div>
+          ) : recentActivity.length ? (
+            <div className="mt-4 grid gap-2 sm:grid-cols-2">
+              {recentActivity.map((activity) => (
+                <div key={activity.id} className="flex items-center justify-between gap-3 rounded-xl border border-slate-100 bg-[#f7f9fb] p-3">
+                  <div className="min-w-0">
+                    <p className="truncate text-[11px] font-bold text-slate-700">{activity.label}</p>
+                    <p className="mt-1 text-[10px] text-slate-400">{activity.area}</p>
+                  </div>
+                  <time className="shrink-0 text-[10px] text-slate-400">{formatLiveDate(activity.timestamp)}</time>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="mt-4"><EmptyState>No recent operational activity recorded.</EmptyState></div>
+          )}
         </section>
 
         <footer className="mt-8 flex flex-col justify-between gap-2 border-t border-slate-200/70 pt-5 text-[10px] text-slate-400 sm:flex-row">
