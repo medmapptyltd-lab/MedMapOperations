@@ -219,6 +219,7 @@ type QueryState<T> = {
   isPending: boolean;
   isError: boolean;
   error: Error | null;
+  refetch: () => Promise<unknown>;
 };
 
 const columns = {
@@ -278,15 +279,61 @@ function booleanValue(row: RawRow, key: string): boolean {
   return row[key] === true;
 }
 
+export type DashboardScope = {
+  departmentIds?: string[];
+  employeeId?: string;
+};
+
+type TableScopeColumnMap = Record<
+  string,
+  { department?: string; employee?: string }
+>;
+
+const scopeColumnsByTable: TableScopeColumnMap = {
+  employees: { department: "department_id" },
+  departments: {},
+  deadlines: { department: "department_id", employee: "owner_employee_id" },
+  tasks: { department: "department_id", employee: "assigned_to" },
+  tickets: { department: "department_id", employee: "assigned_to" },
+  kpis: { department: "department_id", employee: "owner_employee_id" },
+  kpi_periods: {},
+  kpi_targets: { department: "department_id", employee: "employee_id" },
+  kpi_results: { department: "department_id", employee: "employee_id" },
+  revenue: { department: "department_id" },
+  expenses: { department: "department_id" },
+  financial_periods: {},
+  company_alerts: { department: "department_id" },
+};
+
+function applyScopeToQuery(
+  queryBuilder: unknown,
+  table: string,
+  scope?: DashboardScope,
+): unknown {
+  const columns = scopeColumnsByTable[table];
+  if (!scope || !columns) return queryBuilder;
+  let q: any = queryBuilder;
+  if (columns.department && scope.departmentIds && scope.departmentIds.length) {
+    q = q.in(columns.department, scope.departmentIds);
+  }
+  if (columns.employee && scope.employeeId) {
+    q = q.eq(columns.employee, scope.employeeId);
+  }
+  return q;
+}
+
 async function selectRows(
   table: string,
   selection: string,
   organizationId: string,
+  scope?: DashboardScope,
 ): Promise<RawRow[]> {
-  const { data, error } = await getSupabaseClient()
+  const base = getSupabaseClient()
     .from(table)
     .select(selection)
     .eq("organization_id", organizationId);
+  const scoped = applyScopeToQuery(base, table, scope) as any;
+  const { data, error } = await scoped;
   if (error) throw error;
   return rawRows(data);
 }
@@ -295,13 +342,15 @@ async function selectRelatedRows(
   table: string,
   selection: string,
   filters: { column: string; values: string[] }[],
+  scope?: DashboardScope,
 ): Promise<RawRow[]> {
   if (filters.some(({ values }) => values.length === 0)) return [];
-  let query = getSupabaseClient().from(table).select(selection);
+  let query: any = getSupabaseClient().from(table).select(selection);
   for (const { column, values } of filters) {
     query = query.in(column, values);
   }
-  const { data, error } = await query;
+  const scoped = applyScopeToQuery(query, table, scope) as any;
+  const { data, error } = await scoped;
   if (error) throw error;
   return rawRows(data);
 }
@@ -517,10 +566,10 @@ function parseTicket(row: RawRow): Ticket {
   };
 }
 
-async function fetchPeople(organizationId: string): Promise<PeopleData> {
+async function fetchPeople(organizationId: string, scope?: DashboardScope): Promise<PeopleData> {
   const [employees, departments] = await Promise.all([
-    selectRows("employees", columns.employees, organizationId),
-    selectRows("departments", columns.departments, organizationId),
+    selectRows("employees", columns.employees, organizationId, scope),
+    selectRows("departments", columns.departments, organizationId, scope),
   ]);
   return {
     employees: employees.map(parseEmployee),
@@ -530,11 +579,12 @@ async function fetchPeople(organizationId: string): Promise<PeopleData> {
 
 async function fetchOperations(
   organizationId: string,
+  scope?: DashboardScope,
 ): Promise<OperationsData> {
   const [deadlines, tasks, tickets] = await Promise.all([
-    selectRows("deadlines", columns.deadlines, organizationId),
-    selectRows("tasks", columns.tasks, organizationId),
-    selectRows("tickets", columns.tickets, organizationId),
+    selectRows("deadlines", columns.deadlines, organizationId, scope),
+    selectRows("tasks", columns.tasks, organizationId, scope),
+    selectRows("tickets", columns.tickets, organizationId, scope),
   ]);
   return {
     deadlines: deadlines.map(parseDeadline),
@@ -543,10 +593,10 @@ async function fetchOperations(
   };
 }
 
-async function fetchKpis(organizationId: string): Promise<KpiData> {
+async function fetchKpis(organizationId: string, scope?: DashboardScope): Promise<KpiData> {
   const [kpiRows, periodRows] = await Promise.all([
-    selectRows("kpis", columns.kpis, organizationId),
-    selectRows("kpi_periods", columns.kpiPeriods, organizationId),
+    selectRows("kpis", columns.kpis, organizationId, scope),
+    selectRows("kpi_periods", columns.kpiPeriods, organizationId, scope),
   ]);
   const kpis = kpiRows.map(parseKpi);
   const periods = periodRows.map(parseKpiPeriod);
@@ -555,8 +605,8 @@ async function fetchKpis(organizationId: string): Promise<KpiData> {
     { column: "period_id", values: periods.map((period) => period.id) },
   ];
   const [targetRows, resultRows] = await Promise.all([
-    selectRelatedRows("kpi_targets", columns.kpiTargets, relationshipFilters),
-    selectRelatedRows("kpi_results", columns.kpiResults, relationshipFilters),
+    selectRelatedRows("kpi_targets", columns.kpiTargets, relationshipFilters, scope),
+    selectRelatedRows("kpi_results", columns.kpiResults, relationshipFilters, scope),
   ]);
   return {
     kpis,
@@ -566,11 +616,11 @@ async function fetchKpis(organizationId: string): Promise<KpiData> {
   };
 }
 
-async function fetchFinance(organizationId: string): Promise<FinanceData> {
+async function fetchFinance(organizationId: string, scope?: DashboardScope): Promise<FinanceData> {
   const [revenue, expenses, periods] = await Promise.all([
-    selectRows("revenue", columns.revenue, organizationId),
-    selectRows("expenses", columns.expenses, organizationId),
-    selectRows("financial_periods", columns.financialPeriods, organizationId),
+    selectRows("revenue", columns.revenue, organizationId, scope),
+    selectRows("expenses", columns.expenses, organizationId, scope),
+    selectRows("financial_periods", columns.financialPeriods, organizationId, scope),
   ]);
   return {
     revenue: revenue.map(parseRevenue),
@@ -579,11 +629,12 @@ async function fetchFinance(organizationId: string): Promise<FinanceData> {
   };
 }
 
-async function fetchAlerts(organizationId: string): Promise<CompanyAlert[]> {
+async function fetchAlerts(organizationId: string, scope?: DashboardScope): Promise<CompanyAlert[]> {
   const rows = await selectRows(
     "company_alerts",
     columns.companyAlerts,
     organizationId,
+    scope,
   );
   return rows
     .map(parseCompanyAlert)
@@ -592,7 +643,8 @@ async function fetchAlerts(organizationId: string): Promise<CompanyAlert[]> {
 
 function useExecutiveQuery<T>(
   scope: string,
-  fetcher: (organizationId: string) => Promise<T>,
+  fetcher: (organizationId: string, dashboardScope?: DashboardScope) => Promise<T>,
+  dashboardScope?: DashboardScope,
 ): QueryState<T> {
   const { user, loading: authLoading } = useSupabaseAuth();
   const organizationState = useCurrentOrganisation();
@@ -601,10 +653,21 @@ function useExecutiveQuery<T>(
     user && !authLoading && !organizationState.isLoading && organizationId,
   );
 
+  const serializedDashboardScope = [
+    dashboardScope?.departmentIds?.slice().sort().join(",") ?? "",
+    dashboardScope?.employeeId ?? "",
+  ].join("|");
+
   const query = useQuery({
-    queryKey: ["executive-dashboard", scope, user?.id ?? null, organizationId],
+    queryKey: [
+      "executive-dashboard",
+      scope,
+      user?.id ?? null,
+      organizationId,
+      serializedDashboardScope,
+    ],
     enabled,
-    queryFn: () => fetcher(organizationId!),
+    queryFn: () => fetcher(organizationId!, dashboardScope),
     staleTime: 30_000,
   });
 
@@ -618,18 +681,19 @@ function useExecutiveQuery<T>(
         : query.error
           ? new Error("The dashboard data could not be loaded.")
           : null,
+    refetch: () => query.refetch().then((result) => result.data),
   };
 }
 
-export function useExecutiveAlerts() {
-  return useExecutiveQuery("alerts", fetchAlerts);
+export function useExecutiveAlerts(dashboardScope?: DashboardScope) {
+  return useExecutiveQuery("alerts", fetchAlerts, dashboardScope);
 }
 
-export function useExecutiveSummary() {
-  const people = useExecutiveQuery("people", fetchPeople);
-  const operations = useExecutiveQuery("operations", fetchOperations);
-  const kpis = useExecutiveQuery("kpis", fetchKpis);
-  const finance = useExecutiveQuery("finance", fetchFinance);
+export function useExecutiveSummary(dashboardScope?: DashboardScope) {
+  const people = useExecutiveQuery("people", fetchPeople, dashboardScope);
+  const operations = useExecutiveQuery("operations", fetchOperations, dashboardScope);
+  const kpis = useExecutiveQuery("kpis", fetchKpis, dashboardScope);
+  const finance = useExecutiveQuery("finance", fetchFinance, dashboardScope);
   return { people, operations, kpis, finance };
 }
 
@@ -730,12 +794,12 @@ export type ExecutiveKpiRow = {
   commentary: string | null;
 };
 
-export function buildKpiRows(data: KpiData | undefined): {
+export function buildKpiRows(data: KpiData | undefined, now = new Date()): {
   rows: ExecutiveKpiRow[];
   period: KpiPeriod | null;
 } {
   if (!data) return { rows: [], period: null };
-  const period = findCurrentKpiPeriod(data.periods);
+  const period = findCurrentKpiPeriod(data.periods, now);
   if (!period) return { rows: [], period: null };
 
   const activeKpis = data.kpis.filter((kpi) => kpi.active);

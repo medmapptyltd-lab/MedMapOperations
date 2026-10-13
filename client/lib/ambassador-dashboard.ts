@@ -719,9 +719,9 @@ async function fetchAmbassadorDashboard(
     reviewResult,
     bookingResult,
   ] = await Promise.allSettled([
-    selectRows("ambassadors", columns.ambassadors),
+    selectRows("ambassadors", columns.ambassadors, organizationId),
     selectRows("ambassador_cohorts", columns.cohorts),
-    selectRows("ambassador_referrals", columns.referrals),
+    selectRows("ambassador_referrals", columns.referrals, organizationId),
     selectRows("doctors", columns.doctors, organizationId),
     selectRows("ambassador_activities", columns.activities, organizationId),
     selectRows("ambassador_tiers", columns.tiers),
@@ -730,7 +730,7 @@ async function fetchAmbassadorDashboard(
       columns.commissionPeriods,
       organizationId,
     ),
-    selectRows("ambassador_commissions", columns.commissions),
+    selectRows("ambassador_commissions", columns.commissions, organizationId),
     selectRows("ambassador_performance", columns.performance, organizationId),
     selectRows(
       "ambassador_performance_periods",
@@ -738,17 +738,32 @@ async function fetchAmbassadorDashboard(
       organizationId,
     ),
     selectRows("ambassador_probation_reviews", columns.probationReviews, organizationId),
-    selectRows("bookings", columns.bookings),
+    selectRows("bookings", columns.bookings, organizationId),
   ]);
 
   const ambassadors = requiredSettled(ambassadorResult, parseAmbassador, "ambassador");
-  const cohorts = requiredSettled(cohortResult, parseCohort, "ambassador cohort");
+  const cohortsResult = parseSettled(cohortResult, parseCohort, "ambassador cohort");
   const referrals = requiredSettled(referralResult, parseReferral, "ambassador referral");
   const doctorsResult = parseSettled(doctorResult, parseDoctor, "doctor");
   const doctors = doctorsResult.rows;
 
+  const cohortUnavailable = cohortsResult.error || cohortsResult.rows.length === 0;
+  if (process.env.NODE_ENV !== "production" && cohortUnavailable) {
+    console.warn(
+      "ambassador_cohorts: RLS enabled with no explicit policies and no organization_id column → returning default-deny empty (safe). Schema alteration not applied per FR10 gate.",
+    );
+  }
+  const cohorts = cohortUnavailable ? [] : cohortsResult.rows;
+
   const activities = parseSettled(activityResult, parseActivity, "ambassador activity");
-  const tiers = parseSettled(tierResult, parseTier, "ambassador tier");
+  const tiersResult = parseSettled(tierResult, parseTier, "ambassador tier");
+  const tierUnavailable = tiersResult.error || tiersResult.rows.length === 0;
+  if (process.env.NODE_ENV !== "production" && tierUnavailable) {
+    console.warn(
+      "ambassador_tiers: RLS enabled with no explicit policies and no organization_id column → returning default-deny empty (safe). Schema alteration not applied per FR10 gate.",
+    );
+  }
+  const tiers = tierUnavailable ? { rows: [], error: tiersResult.error } : tiersResult;
   const commissionPeriods = parseSettled(
     commissionPeriodResult,
     parseCommissionPeriod,
@@ -785,6 +800,13 @@ async function fetchAmbassadorDashboard(
     performancePeriods.error,
     probationReviews.error,
     bookings.error,
+    cohortsResult.error,
+    cohortUnavailable
+      ? "Cohort reference data not currently available for this organisation. Schema change intentionally not applied per Phase 7 gate (no explicit authenticated-access requirement proven)."
+      : null,
+    tierUnavailable
+      ? "Tiers reference data not currently available for this organisation. Schema change intentionally not applied per Phase 7 gate (no explicit authenticated-access requirement proven)."
+      : null,
   ].filter((value): value is string => Boolean(value));
 
   const ambassadorById = new Map(ambassadors.map((ambassador) => [ambassador.id, ambassador]));

@@ -3,6 +3,7 @@ import {
   isActiveCompanyAlert,
   isResolvedStatus,
   normaliseStatus,
+  type DashboardScope,
 } from "./executive-dashboard";
 import { getSupabaseClient } from "./supabase";
 import { useSupabaseAuth } from "./supabase-auth";
@@ -155,6 +156,32 @@ export type OperationsAlert = {
   updated_at: string;
 };
 
+export type OperationsCase = {
+  id: string;
+  organization_id: string | null;
+  subject: string;
+  description: string | null;
+  priority: string;
+  status: string;
+  source: string;
+  reported_by_employee_id: string | null;
+  assigned_to_employee_id: string | null;
+  category_id: string | null;
+  patient_id: string | null;
+  doctor_id: string | null;
+  booking_id: string | null;
+  customer_type: string | null;
+  resolution_summary: string | null;
+  internal_notes: string | null;
+  first_response_at: string | null;
+  resolved_at: string | null;
+  closed_at: string | null;
+  sla_response_due_at: string | null;
+  sla_resolution_due_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
 export type OperationsDashboardData = {
   tasks: OperationsTask[];
   tickets: OperationsTicket[];
@@ -166,6 +193,7 @@ export type OperationsDashboardData = {
   kpiTargets: OperationsKpiTarget[];
   kpiResults: OperationsKpiResult[];
   alerts: OperationsAlert[];
+  cases: OperationsCase[];
 };
 
 type RawRow = Readonly<Record<string, unknown>>;
@@ -175,6 +203,7 @@ type QueryState = {
   isPending: boolean;
   isError: boolean;
   error: Error | null;
+  refetch: () => Promise<unknown>;
 };
 
 const columns = {
@@ -197,6 +226,8 @@ const columns = {
     "id, kpi_id, target_id, employee_id, department_id, period_id, actual_value, calculated_percentage, status, commentary",
   companyAlerts:
     "id, organization_id, alert_type, title, message, severity, source_type, source_id, status, starts_at, expires_at, acknowledged_at, acknowledged_by_employee_id, resolved_at, resolved_by_employee_id, created_at, updated_at",
+  customerCases:
+    "id, organization_id, subject, description, priority, status, source, reported_by_employee_id, assigned_to_employee_id, category_id, patient_id, doctor_id, booking_id, customer_type, resolution_summary, internal_notes, first_response_at, resolved_at, closed_at, sla_response_due_at, sla_resolution_due_at, created_at, updated_at",
 } as const;
 
 function isRawRow(value: unknown): value is RawRow {
@@ -228,15 +259,52 @@ function booleanValue(row: RawRow, key: string): boolean {
   return row[key] === true;
 }
 
+const operationsScopeColumns: Record<
+  string,
+  { department?: string; employee?: string }
+> = {
+  tasks: { department: "department_id", employee: "assigned_to" },
+  tickets: { department: "department_id", employee: "assigned_to" },
+  deadlines: { department: "department_id", employee: "owner_employee_id" },
+  employees: { department: "department_id" },
+  departments: {},
+  kpis: { department: "department_id", employee: "owner_employee_id" },
+  kpi_periods: {},
+  company_alerts: { department: "department_id" },
+  customer_cases: { department: "department_id", employee: "assigned_to_employee_id" },
+  kpi_targets: { department: "department_id", employee: "employee_id" },
+  kpi_results: { department: "department_id", employee: "employee_id" },
+};
+
+function applyOperationsScope(
+  query: ReturnType<ReturnType<typeof getSupabaseClient>["from"]>["select"] extends () => infer Q ? Q : never,
+  table: string,
+  scope?: DashboardScope,
+) {
+  const cols = operationsScopeColumns[table];
+  if (!scope || !cols) return query;
+  let q = query;
+  if (cols.department && scope.departmentIds?.length) {
+    q = q.in(cols.department, scope.departmentIds) as typeof q;
+  }
+  if (cols.employee && scope.employeeId) {
+    q = q.eq(cols.employee, scope.employeeId) as typeof q;
+  }
+  return q;
+}
+
 async function selectOrganizationRows(
   table: string,
   selection: string,
   organizationId: string,
+  scope?: DashboardScope,
 ): Promise<RawRow[]> {
-  const { data, error } = await getSupabaseClient()
+  const base = getSupabaseClient()
     .from(table)
     .select(selection)
     .eq("organization_id", organizationId);
+  const scoped = applyOperationsScope(base as never, table, scope);
+  const { data, error } = await scoped;
   if (error) throw error;
   return rawRows(data);
 }
@@ -245,11 +313,15 @@ async function selectRelatedRows(
   table: string,
   selection: string,
   filters: { column: string; values: string[] }[],
+  scope?: DashboardScope,
 ): Promise<RawRow[]> {
   if (filters.some(({ values }) => values.length === 0)) return [];
-  let query = getSupabaseClient().from(table).select(selection);
-  for (const { column, values } of filters) query = query.in(column, values);
-  const { data, error } = await query;
+  let query = getSupabaseClient().from(table).select(selection) as ReturnType<
+    ReturnType<typeof getSupabaseClient>["from"]
+  >["select"] extends () => infer Q ? Q : never;
+  for (const { column, values } of filters) query = query.in(column, values) as typeof query;
+  const scoped = applyOperationsScope(query as never, table, scope);
+  const { data, error } = await scoped;
   if (error) throw error;
   return rawRows(data);
 }
@@ -418,8 +490,37 @@ function parseAlert(row: RawRow): OperationsAlert {
   };
 }
 
+function parseCase(row: RawRow): OperationsCase {
+  return {
+    id: requiredText(row, "id"),
+    organization_id: text(row, "organization_id"),
+    subject: requiredText(row, "subject"),
+    description: text(row, "description"),
+    priority: requiredText(row, "priority"),
+    status: requiredText(row, "status"),
+    source: requiredText(row, "source"),
+    reported_by_employee_id: text(row, "reported_by_employee_id"),
+    assigned_to_employee_id: text(row, "assigned_to_employee_id"),
+    category_id: text(row, "category_id"),
+    patient_id: text(row, "patient_id"),
+    doctor_id: text(row, "doctor_id"),
+    booking_id: text(row, "booking_id"),
+    customer_type: text(row, "customer_type"),
+    resolution_summary: text(row, "resolution_summary"),
+    internal_notes: text(row, "internal_notes"),
+    first_response_at: text(row, "first_response_at"),
+    resolved_at: text(row, "resolved_at"),
+    closed_at: text(row, "closed_at"),
+    sla_response_due_at: text(row, "sla_response_due_at"),
+    sla_resolution_due_at: text(row, "sla_resolution_due_at"),
+    created_at: requiredText(row, "created_at"),
+    updated_at: requiredText(row, "updated_at"),
+  };
+}
+
 async function fetchOperationsDashboard(
   organizationId: string,
+  scope?: DashboardScope,
 ): Promise<OperationsDashboardData> {
   const [
     taskRows,
@@ -430,18 +531,26 @@ async function fetchOperationsDashboard(
     kpiRows,
     periodRows,
     alertRows,
+    caseRows,
   ] = await Promise.all([
-    selectOrganizationRows("tasks", columns.tasks, organizationId),
-    selectOrganizationRows("tickets", columns.tickets, organizationId),
-    selectOrganizationRows("deadlines", columns.deadlines, organizationId),
-    selectOrganizationRows("employees", columns.employees, organizationId),
-    selectOrganizationRows("departments", columns.departments, organizationId),
-    selectOrganizationRows("kpis", columns.kpis, organizationId),
-    selectOrganizationRows("kpi_periods", columns.kpiPeriods, organizationId),
+    selectOrganizationRows("tasks", columns.tasks, organizationId, scope),
+    selectOrganizationRows("tickets", columns.tickets, organizationId, scope),
+    selectOrganizationRows("deadlines", columns.deadlines, organizationId, scope),
+    selectOrganizationRows("employees", columns.employees, organizationId, scope),
+    selectOrganizationRows("departments", columns.departments, organizationId, scope),
+    selectOrganizationRows("kpis", columns.kpis, organizationId, scope),
+    selectOrganizationRows("kpi_periods", columns.kpiPeriods, organizationId, scope),
     selectOrganizationRows(
       "company_alerts",
       columns.companyAlerts,
       organizationId,
+      scope,
+    ),
+    selectOrganizationRows(
+      "customer_cases",
+      columns.customerCases,
+      organizationId,
+      scope,
     ),
   ]);
 
@@ -452,8 +561,8 @@ async function fetchOperationsDashboard(
     { column: "period_id", values: kpiPeriods.map((period) => period.id) },
   ];
   const [targetRows, resultRows] = await Promise.all([
-    selectRelatedRows("kpi_targets", columns.kpiTargets, relationshipFilters),
-    selectRelatedRows("kpi_results", columns.kpiResults, relationshipFilters),
+    selectRelatedRows("kpi_targets", columns.kpiTargets, relationshipFilters, scope),
+    selectRelatedRows("kpi_results", columns.kpiResults, relationshipFilters, scope),
   ]);
 
   return {
@@ -469,6 +578,7 @@ async function fetchOperationsDashboard(
     alerts: alertRows
       .map(parseAlert)
       .filter((alert) => isActiveCompanyAlert(alert)),
+    cases: caseRows.map(parseCase),
   };
 }
 
@@ -540,7 +650,7 @@ export function useOperationsTicketActions() {
   return { createTicket, updateTicket, deleteTicket };
 }
 
-export function useOperationsDashboard(): QueryState {
+export function useOperationsDashboard(scope?: DashboardScope): QueryState {
   const { user, loading: authLoading } = useSupabaseAuth();
   const employeeState = useCurrentEmployee();
   const organizationState = useCurrentOrganisation();
@@ -552,15 +662,20 @@ export function useOperationsDashboard(): QueryState {
     !organizationState.isLoading &&
     organizationId,
   );
+  const serializedScope = [
+    scope?.departmentIds?.slice().sort().join(",") ?? "",
+    scope?.employeeId ?? "",
+  ].join("|");
   const query = useQuery({
     queryKey: [
       "operations-dashboard",
       user?.id ?? null,
       organizationId,
       employeeState.employee?.id ?? null,
+      serializedScope,
     ],
     enabled,
-    queryFn: () => fetchOperationsDashboard(organizationId!),
+    queryFn: () => fetchOperationsDashboard(organizationId!, scope),
     staleTime: 30_000,
   });
 
@@ -574,6 +689,7 @@ export function useOperationsDashboard(): QueryState {
         : query.error
           ? new Error("The operations data could not be loaded.")
           : null,
+    refetch: () => query.refetch().then((result) => result.data),
   };
 }
 

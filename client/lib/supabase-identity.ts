@@ -29,10 +29,25 @@ export type CurrentEmployee = EmployeeRecord & {
   isExecutive: boolean | null;
 };
 
+export type RoleMeta = {
+  id: string;
+  name: string | null;
+  role_level: string | null;
+} | null;
+
+export type DepartmentMeta = {
+  id: string;
+  name: string | null;
+  department_group: string | null;
+} | null;
+
 export type CurrentEmployeeState = {
   employee: CurrentEmployee | null;
   permissionIds: string[];
   isExecutive: boolean | null;
+  roleMeta: RoleMeta;
+  deptMeta: DepartmentMeta;
+  ownedDepartmentIds: string[];
   status: "loading" | "unauthenticated" | "active" | "no-active-employee" | "error";
   isLoading: boolean;
   isUnauthenticated: boolean;
@@ -58,6 +73,7 @@ export type CurrentOrganisationState = {
   isUnauthenticated: boolean;
   hasNoOrganization: boolean;
   error: Error | null;
+  refetch: () => Promise<unknown>;
 };
 
 const employeeColumns = [
@@ -156,9 +172,79 @@ export function useCurrentEmployee(): CurrentEmployeeState {
     },
   });
 
+  const roleQuery = useQuery({
+    queryKey: ["role-by-id", employee?.role_id ?? null],
+    enabled: Boolean(employee?.role_id),
+    staleTime: 10 * 60 * 1000,
+    queryFn: async () => {
+      const client = getSupabaseClient();
+      const { data, error } = await client
+        .from("roles")
+        .select("id,name,role_level")
+        .eq("id", employee!.role_id!)
+        .maybeSingle();
+      if (error) {
+        console.warn("[role-by-id] lookup failed", error.message);
+        return null;
+      }
+      if (!data) return null;
+      return {
+        id: data.id as string,
+        name: (data.name as string | null) ?? null,
+        role_level: (data.role_level as string | null) ?? null,
+      };
+    },
+  });
+
+  const deptQuery = useQuery({
+    queryKey: ["department-by-id", employee?.department_id ?? null],
+    enabled: Boolean(employee?.department_id),
+    staleTime: 10 * 60 * 1000,
+    queryFn: async () => {
+      const client = getSupabaseClient();
+      const { data, error } = await client
+        .from("departments")
+        .select("id,name,department_group")
+        .eq("id", employee!.department_id!)
+        .maybeSingle();
+      if (error) {
+        console.warn("[department-by-id] lookup failed", error.message);
+        return null;
+      }
+      if (!data) return null;
+      return {
+        id: data.id as string,
+        name: (data.name as string | null) ?? null,
+        department_group: (data.department_group as string | null) ?? null,
+      };
+    },
+  });
+
+  const oversightQuery = useQuery({
+    queryKey: ["my-owned-departments", employee?.id ?? null],
+    enabled: Boolean(employee?.id) && executiveQuery.data === true,
+    staleTime: 5 * 60 * 1000,
+    queryFn: async () => {
+      const client = getSupabaseClient();
+      const { data, error } = await client
+        .from("department_oversight")
+        .select("department_id")
+        .eq("executive_employee_id", employee!.id);
+      if (error) {
+        console.warn("[my-owned-departments] lookup failed", error.message);
+        return [];
+      }
+      return ((data ?? []) as { department_id: string }[]).map((row) => row.department_id).filter(Boolean);
+    },
+  });
+
   const isUnauthenticated = !authLoading && !userId;
   const hasNoActiveEmployee = Boolean(userId) && employeeQuery.isSuccess && !employee;
-  const isLoading = authLoading || (Boolean(userId) && employeeQuery.isPending);
+  const metaLoading =
+    (employee?.role_id ? roleQuery.isPending : false) ||
+    (employee?.department_id ? deptQuery.isPending : false) ||
+    (executiveQuery.data === true ? oversightQuery.isPending : false);
+  const isLoading = authLoading || (Boolean(userId) && employeeQuery.isPending) || metaLoading;
   const status = isLoading
     ? "loading"
     : isUnauthenticated
@@ -178,10 +264,17 @@ export function useCurrentEmployee(): CurrentEmployeeState {
       }
     : null;
 
+  const roleMeta = employee?.role_id ? (roleQuery.data ?? null) : null;
+  const deptMeta = employee?.department_id ? (deptQuery.data ?? null) : null;
+  const ownedDepartmentIds = executiveQuery.data === true ? (oversightQuery.data ?? []) : [];
+
   return {
     employee: currentEmployee,
     permissionIds,
     isExecutive: executiveQuery.data ?? null,
+    roleMeta,
+    deptMeta,
+    ownedDepartmentIds,
     status,
     isLoading,
     isUnauthenticated,
@@ -249,5 +342,6 @@ export function useCurrentOrganisation(): CurrentOrganisationState {
     isUnauthenticated,
     hasNoOrganization,
     error: organizationQuery.error ? asError(organizationQuery.error) : null,
+    refetch: () => organizationQuery.refetch().then((result) => result.data),
   };
 }

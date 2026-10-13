@@ -29,3 +29,17 @@ dist-ssr
 *.sw?
 
 .config/
+
+# Phase audit scratch / scratch utility scripts
+phase7-*
+_scratch_*.cjs
+_scratch_*.mjs
+_do_*.cjs
+_run_install*.cjs
+_build_output.txt
+_test_output.txt
+_typecheck_output.txt
+npm-*.txt
+_pnpm*.txt
+_node_test.txt
+_start_dev.cjs

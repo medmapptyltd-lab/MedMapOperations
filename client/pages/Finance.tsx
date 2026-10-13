@@ -2,79 +2,751 @@ import { FormEvent, useMemo, useState } from "react";
 import {
   ArrowDownRight,
   ArrowUpRight,
-  CalendarDays,
-  ChevronRight,
   CircleDollarSign,
-  FilePenLine,
-  Filter,
   Landmark,
   Plus,
   ReceiptText,
+  Save,
   Trash2,
   WalletCards,
-  X,
 } from "lucide-react";
 import { AppShell } from "@/components/medmap/AppShell";
-import { formatDate, formatZAR, formatZARWithSign, Transaction, useMedMap } from "@/lib/medmap-store";
+import { IfPermitted } from "@/components/medmap/IfPermitted";
+import { useExecutiveSummary } from "@/lib/executive-dashboard";
+import { useFinanceMutations, type RevenueInput, type ExpenseInput } from "@/lib/crud";
 import { cn } from "@/lib/utils";
 
-const defaultTransaction: Omit<Transaction, "id"> = {
-  date: "2026-09-05",
-  description: "",
-  kind: "expense",
-  category: "Operations",
-  amount: 0,
-  status: "Paid",
-  owner: "Ofentse Mashau",
-  owedTo: "Ofentse Mashau",
-  notes: "",
-};
+type SectionState = "loading" | "empty" | "error" | "ready";
 
-function StatCard({ label, value, detail, tone, icon: Icon }: { label: string; value: string; detail: string; tone: "mint" | "red" | "amber" | "navy"; icon: React.ElementType }) {
-  return <div className="rounded-2xl border border-slate-200/80 bg-white p-4 shadow-[0_5px_20px_rgba(21,36,58,0.035)]"><div className="flex items-start justify-between"><span className={cn("grid size-9 place-items-center rounded-xl", tone === "mint" && "bg-[#e8f8f2] text-[#1b9975]", tone === "red" && "bg-[#ffe9e6] text-[#bf5b56]", tone === "amber" && "bg-[#fff2d9] text-[#b3781f]", tone === "navy" && "bg-[#eaf0f8] text-[#2f527a]")}><Icon size={17} /></span><span className={cn("size-1.5 rounded-full", tone === "mint" ? "bg-[#36ac87]" : tone === "red" ? "bg-[#da6560]" : tone === "amber" ? "bg-[#e0a03a]" : "bg-[#4a87c9]")} /></div><p className="mt-4 text-[11px] font-medium text-slate-500">{label}</p><p className={cn("mt-1 font-display text-[26px] font-bold tracking-[-0.06em]", tone === "red" ? "text-[#c1514d]" : "text-[#152239]")}>{value}</p><p className="mt-1 text-[10px] text-slate-400">{detail}</p></div>;
+function getSectionState<T>(
+  isPending: boolean,
+  isError: boolean,
+  items: readonly T[] | undefined,
+): SectionState {
+  if (isPending) return "loading";
+  if (isError) return "error";
+  if (!items || items.length === 0) return "empty";
+  return "ready";
 }
 
-function TransactionForm({ transaction, contributors, onSave, onCancel, onDelete }: { transaction: Omit<Transaction, "id"> & { id?: string }; contributors: string[]; onSave: (transaction: Omit<Transaction, "id">) => void; onCancel: () => void; onDelete?: () => void }) {
-  const [form, setForm] = useState(transaction);
-  const update = (key: keyof typeof form, value: string | number) => setForm((current) => ({ ...current, [key]: value }));
-  const submit = (event: FormEvent) => { event.preventDefault(); if (form.description.trim() && form.amount > 0) onSave(form); };
-  return <form onSubmit={submit} className="rounded-2xl border border-[#bfe9da] bg-[#f2fcf8] p-4 sm:p-5"><div className="flex items-center justify-between gap-3"><div><p className="text-[12px] font-bold text-[#176c56]">{transaction.id ? "Edit transaction" : "Add transaction"}</p><p className="mt-1 text-[10px] text-slate-500">Every amount stays dated and traceable in the local ledger.</p></div><button type="button" onClick={onCancel} className="rounded-lg p-1.5 text-slate-400 hover:bg-white hover:text-slate-700" aria-label="Close transaction form"><X size={16} /></button></div><div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4"><label className="text-[10px] font-bold text-slate-500">Date<input type="date" value={form.date} onChange={(e) => update("date", e.target.value)} className="form-input" /></label><label className="text-[10px] font-bold text-slate-500">Timestamp (optional)<input type="datetime-local" value={form.timestamp ?? ""} onChange={(e) => update("timestamp", e.target.value)} className="form-input" /></label><label className="text-[10px] font-bold text-slate-500">Type<select value={form.kind} onChange={(e) => update("kind", e.target.value)} className="form-input"><option value="revenue">Revenue</option><option value="expense">Expense</option><option value="funding">Contributor funding</option></select></label><label className="text-[10px] font-bold text-slate-500">Status<select value={form.status} onChange={(e) => update("status", e.target.value)} className="form-input"><option>Paid</option><option>Payable</option><option>Committed</option></select></label><label className="text-[10px] font-bold text-slate-500">Amount (ZAR)<input type="number" min="0" step="0.01" value={form.amount || ""} onChange={(e) => update("amount", Number(e.target.value))} className="form-input" /></label><label className="text-[10px] font-bold text-slate-500">Owed to / contributor<select value={form.owedTo ?? ""} onChange={(e) => update("owedTo", e.target.value)} className="form-input"><option value="">Not applicable</option>{contributors.map((contributor) => <option key={contributor}>{contributor}</option>)}</select></label><label className="text-[10px] font-bold text-slate-500 sm:col-span-2">Description<input value={form.description} onChange={(e) => update("description", e.target.value)} placeholder="e.g. October salaries payable" className="form-input" /></label><label className="text-[10px] font-bold text-slate-500">Category<input value={form.category} onChange={(e) => update("category", e.target.value)} placeholder="Salaries payable" className="form-input" /></label><label className="text-[10px] font-bold text-slate-500">Owner<input value={form.owner} onChange={(e) => update("owner", e.target.value)} className="form-input" /></label><label className="text-[10px] font-bold text-slate-500 sm:col-span-4">Notes<textarea value={form.notes} onChange={(e) => update("notes", e.target.value)} rows={2} className="form-input resize-none" /></label></div><div className="mt-4 flex flex-wrap justify-end gap-2"><button type="button" onClick={onCancel} className="rounded-xl px-3.5 py-2 text-[11px] font-bold text-slate-500 hover:bg-white">Cancel</button>{onDelete && <button type="button" onClick={onDelete} className="mr-auto inline-flex items-center gap-1.5 rounded-xl px-3.5 py-2 text-[11px] font-bold text-[#bd504d] hover:bg-white"><Trash2 size={13} /> Delete</button>}<button type="submit" className="rounded-xl bg-[#182842] px-4 py-2 text-[11px] font-bold text-white shadow-sm hover:bg-[#233958]">Save transaction</button></div></form>;
+function StatCard({
+  label,
+  value,
+  detail,
+  tone,
+  icon: Icon,
+}: {
+  label: string;
+  value: string;
+  detail: string;
+  tone: "mint" | "red" | "amber" | "navy";
+  icon: React.ElementType;
+}) {
+  return (
+    <div className="rounded-2xl border border-slate-200/80 bg-white p-4 shadow-[0_5px_20px_rgba(21,36,58,0.035)]">
+      <div className="flex items-start justify-between">
+        <span
+          className={cn(
+            "grid size-9 place-items-center rounded-xl",
+            tone === "mint" && "bg-[#e8f8f2] text-[#1b9975]",
+            tone === "red" && "bg-[#ffe9e6] text-[#bf5b56]",
+            tone === "amber" && "bg-[#fff2d9] text-[#b3781f]",
+            tone === "navy" && "bg-[#eaf0f8] text-[#2f527a]",
+          )}
+        >
+          <Icon size={17} />
+        </span>
+        <span
+          className={cn(
+            "size-1.5 rounded-full",
+            tone === "mint"
+              ? "bg-[#36ac87]"
+              : tone === "red"
+                ? "bg-[#da6560]"
+                : tone === "amber"
+                  ? "bg-[#e0a03a]"
+                  : "bg-[#4a87c9]",
+          )}
+        />
+      </div>
+      <p className="mt-4 text-[11px] font-medium text-slate-500">{label}</p>
+      <p
+        className={cn(
+          "mt-1 font-display text-[26px] font-bold tracking-[-0.06em]",
+          tone === "red" ? "text-[#c1514d]" : "text-[#152239]",
+        )}
+      >
+        {value}
+      </p>
+      <p className="mt-1 text-[10px] text-slate-400">{detail}</p>
+    </div>
+  );
 }
+
+function SectionLoading({ label }: { label: string }) {
+  return (
+    <div className="p-8 text-center">
+      <div className="mx-auto grid size-10 place-items-center rounded-xl bg-slate-100">
+        <ReceiptText size={18} className="animate-pulse text-slate-400" />
+      </div>
+      <p className="mt-3 text-[11px] font-medium text-slate-400">Loading {label}…</p>
+    </div>
+  );
+}
+
+function SectionError({ label, message }: { label: string; message?: string }) {
+  return (
+    <div className="p-8 text-center">
+      <div className="mx-auto grid size-10 place-items-center rounded-xl bg-[#ffe5e3]">
+        <CircleDollarSign size={18} className="text-[#bd504d]" />
+      </div>
+      <p className="mt-3 text-[11px] font-bold text-[#bd504d]">Could not load {label}</p>
+      <p className="mt-1 text-[10px] text-slate-400">
+        {message ?? "Refresh the page and try again."}
+      </p>
+    </div>
+  );
+}
+
+function SectionEmpty({ label, hint }: { label: string; hint: string }) {
+  return (
+    <div className="p-8 text-center">
+      <div className="mx-auto grid size-10 place-items-center rounded-xl bg-slate-50">
+        <Landmark size={18} className="text-slate-400" />
+      </div>
+      <p className="mt-3 text-[11px] font-medium text-slate-500">No {label} yet</p>
+      <p className="mt-1 text-[10px] text-slate-400">{hint}</p>
+    </div>
+  );
+}
+
+function formatZAR(value: number | null | undefined) {
+  if (value === null || value === undefined || !Number.isFinite(value)) return "R 0.00";
+  return new Intl.NumberFormat("en-ZA", {
+    style: "currency",
+    currency: "ZAR",
+    maximumFractionDigits: 2,
+  }).format(value);
+}
+
+function formatDate(value: string) {
+  try {
+    return new Intl.DateTimeFormat("en-ZA", {
+      day: "2-digit",
+      month: "short",
+      year: "numeric",
+    }).format(new Date(value));
+  } catch {
+    return value;
+  }
+}
+
+const today = () => new Date().toISOString().slice(0, 10);
 
 export default function Finance() {
-  const { transactions, employees, addTransaction, updateTransaction, deleteTransaction, resetDemoData } = useMedMap();
-  const contributors = employees.map((employee) => employee.name);
-  const [showAdd, setShowAdd] = useState(false);
-  const [editing, setEditing] = useState<Transaction | null>(null);
-  const [kindFilter, setKindFilter] = useState<"all" | Transaction["kind"]>("all");
-  const [search, setSearch] = useState("");
+  const { finance: financeQuery } = useExecutiveSummary();
+  const {
+    createRevenue,
+    deleteRevenue,
+    createExpense,
+    deleteExpense,
+  } = useFinanceMutations();
 
-  const totals = useMemo(() => transactions.reduce((result, transaction) => {
-    const amount = transaction.kind === "revenue" ? transaction.amount : transaction.kind === "expense" ? -transaction.amount : 0;
-    result.revenue += transaction.kind === "revenue" ? transaction.amount : 0;
-    result.expenses += transaction.kind === "expense" ? transaction.amount : 0;
-    result.funding += transaction.kind === "funding" ? transaction.amount : 0;
-    result.net += amount;
-    if (transaction.kind === "funding" && transaction.owedTo) result.fundingByContributor[transaction.owedTo] = (result.fundingByContributor[transaction.owedTo] ?? 0) + transaction.amount;
-    if (transaction.kind === "expense" && transaction.status === "Paid") result.paidExpenses += transaction.amount;
-    if (transaction.kind === "expense" && transaction.status !== "Paid") result.payable += transaction.amount;
-    if (transaction.category === "Commissions" && transaction.status === "Paid") result.commissionsPaid += transaction.amount;
-    if (transaction.category === "Salaries payable") result.salariesPayable += transaction.amount;
-    return result;
-  }, { revenue: 0, expenses: 0, funding: 0, net: 0, paidExpenses: 0, payable: 0, commissionsPaid: 0, salariesPayable: 0, fundingByContributor: {} as Record<string, number> }), [transactions]);
+  const revenue = financeQuery.data?.revenue ?? [];
+  const expenses = financeQuery.data?.expenses ?? [];
 
-  const filteredTransactions = transactions.filter((transaction) => (kindFilter === "all" || transaction.kind === kindFilter) && `${transaction.description} ${transaction.category} ${transaction.owner} ${transaction.owedTo ?? ""}`.toLowerCase().includes(search.toLowerCase())).sort((a, b) => b.date.localeCompare(a.date));
-  const monthly = ["2026-08", "2026-09"].map((month) => { const rows = transactions.filter((transaction) => transaction.date.startsWith(month)); const revenue = rows.filter((row) => row.kind === "revenue").reduce((sum, row) => sum + row.amount, 0); const expenses = rows.filter((row) => row.kind === "expense").reduce((sum, row) => sum + row.amount, 0); return { month, revenue, expenses, net: revenue - expenses }; });
+  const totals = useMemo(() => {
+    const totalRevenue = revenue.reduce(
+      (sum, row) => sum + (row.amount ?? 0),
+      0,
+    );
+    const totalExpenses = expenses.reduce(
+      (sum, row) => sum + (row.amount ?? 0),
+      0,
+    );
+    return {
+      revenue: totalRevenue,
+      expenses: totalExpenses,
+      net: totalRevenue - totalExpenses,
+    };
+  }, [revenue, expenses]);
 
-  return <AppShell><div className="mx-auto max-w-[1440px] px-5 pb-12 pt-8 sm:px-8 xl:px-10"><div className="flex flex-col justify-between gap-5 md:flex-row md:items-end"><div><div className="mb-3 flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.17em] text-[#bf5b56]"><CircleDollarSign size={13} /> Financial health</div><h1 className="font-display text-[32px] font-bold tracking-[-0.06em] text-[#152239] sm:text-[39px]">The money view, without the blur.</h1><p className="mt-2 max-w-[700px] text-[13px] leading-6 text-slate-500">A dated management ledger that keeps revenue, cash, commitments, salaries and commissions distinct. The current operating position is negative and visible.</p></div><div className="flex flex-wrap items-center gap-2"><button onClick={resetDemoData} className="rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-[11px] font-bold text-slate-500 shadow-sm hover:border-slate-300">Reset demo ledger</button><button onClick={() => { setShowAdd(true); setEditing(null); }} className="inline-flex items-center gap-2 rounded-xl bg-[#182842] px-3.5 py-2.5 text-[11px] font-bold text-white shadow-[0_5px_12px_rgba(20,35,58,.15)] hover:bg-[#233958]"><Plus size={15} /> Add transaction</button></div></div>
+  const revenueState = getSectionState(
+    financeQuery.isPending,
+    financeQuery.isError,
+    revenue,
+  );
+  const expensesState = getSectionState(
+    financeQuery.isPending,
+    financeQuery.isError,
+    expenses,
+  );
 
-    <div className="mt-7 grid gap-3 sm:grid-cols-2 xl:grid-cols-5"><StatCard label="Recorded revenue" value={formatZAR(totals.revenue)} detail="Paid revenue records" tone="mint" icon={ArrowUpRight} /><StatCard label="Company expenses" value={formatZAR(totals.expenses)} detail="Paid + payable + committed" tone="red" icon={ArrowDownRight} /><StatCard label="Operating position" value={formatZARWithSign(totals.net)} detail="Revenue less all recorded expenses" tone="red" icon={WalletCards} /><StatCard label="Outstanding obligations" value={formatZAR(totals.payable)} detail="Payable or committed, not cash paid" tone="amber" icon={ReceiptText} /><StatCard label="Contributor funding" value={formatZAR(totals.funding)} detail="Cash owed to contributors" tone="navy" icon={Landmark} /></div>
+  const [showAddRevenue, setShowAddRevenue] = useState(false);
+  const [showAddExpense, setShowAddExpense] = useState(false);
 
-    <div className="mt-5 grid gap-5 xl:grid-cols-[minmax(0,1.2fr)_minmax(310px,.8fr)]"><section className="rounded-2xl border border-[#f0cdca] bg-[#fff8f7] p-5 shadow-[0_5px_20px_rgba(21,36,58,0.035)] sm:p-6"><div className="flex items-start justify-between gap-4"><div><div className="flex items-center gap-2"><span className="grid size-8 place-items-center rounded-lg bg-[#ffe9e6] text-[#bf5b56]"><Landmark size={16} /></span><h2 className="font-display text-[16px] font-bold tracking-[-0.03em] text-[#152239]">Running at a minus</h2></div><p className="mt-2 text-[11px] text-slate-500">The loss is calculated directly from the transaction records below.</p></div><span className="rounded-full bg-[#ffe5e3] px-2.5 py-1 text-[10px] font-bold text-[#bd504d]">Critical · {Math.round((Math.abs(totals.net) / Math.max(totals.revenue, 1)) * 100)}% loss load</span></div><div className="mt-6 flex flex-wrap items-end gap-x-8 gap-y-4"><div><p className="text-[10px] font-medium text-slate-400">Revenue</p><p className="mt-1 font-display text-[28px] font-bold tracking-[-0.06em] text-[#152239]">{formatZAR(totals.revenue)}</p></div><span className="mb-2 text-slate-300">−</span><div><p className="text-[10px] font-medium text-slate-400">Expenses</p><p className="mt-1 font-display text-[28px] font-bold tracking-[-0.06em] text-[#c1514d]">{formatZAR(totals.expenses)}</p></div><span className="mb-2 text-slate-300">=</span><div><p className="text-[10px] font-medium text-slate-400">Net operating position</p><p className="mt-1 font-display text-[28px] font-bold tracking-[-0.06em] text-[#c1514d]">{formatZARWithSign(totals.net)}</p></div></div><div className="mt-6 h-2 rounded-full bg-[#f7d9d6]"><div className="h-2 w-[45%] rounded-full bg-[#e07a72]" /></div><p className="mt-2 text-[10px] text-slate-400">Expenses are {Math.round((totals.expenses / Math.max(totals.revenue, 1)) * 100)}% of recorded revenue. Improve revenue, reduce commitments, or both.</p></section>
+  const [revenueForm, setRevenueForm] = useState<RevenueInput>({
+    revenueDate: today(),
+    revenueType: "Service",
+    amount: 0,
+    currency: "ZAR",
+    status: "recognized",
+    description: "",
+  });
 
-    <section className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-[0_5px_20px_rgba(21,36,58,0.035)] sm:p-6"><div className="flex items-center gap-2"><span className="grid size-8 place-items-center rounded-lg bg-[#fff2d9] text-[#b3781f]"><ReceiptText size={16} /></span><h2 className="font-display text-[16px] font-bold tracking-[-0.03em] text-[#152239]">Expense composition</h2></div><p className="mt-2 text-[11px] text-slate-400">The company cost base includes people and commissions.</p><div className="mt-5 space-y-4"><div className="flex items-center justify-between"><div><p className="text-[11px] font-bold text-slate-700">Salaries payable</p><p className="mt-1 text-[10px] text-slate-400">Accrued payroll obligations</p></div><p className="font-display text-[18px] font-bold text-[#c1514d]">{formatZAR(totals.salariesPayable)}</p></div><div className="flex items-center justify-between"><div><p className="text-[11px] font-bold text-slate-700">Commissions paid</p><p className="mt-1 text-[10px] text-slate-400">Ambassador commission records</p></div><p className="font-display text-[18px] font-bold text-[#c1514d]">{formatZAR(totals.commissionsPaid)}</p></div><div className="flex items-center justify-between"><div><p className="text-[11px] font-bold text-slate-700">Cash expenses paid</p><p className="mt-1 text-[10px] text-slate-400">Excludes payables and commitments</p></div><p className="font-display text-[18px] font-bold text-[#152239]">{formatZAR(totals.paidExpenses)}</p></div></div><div className="mt-5 rounded-xl bg-[#f7f9fb] p-3 text-[10px] leading-5 text-slate-500">Committed and payable amounts are liabilities in the operating view, not cash already spent.</div></section></div>
+  const [expenseForm, setExpenseForm] = useState<ExpenseInput>({
+    expenseDate: today(),
+    amount: 0,
+    description: "",
+    currency: "ZAR",
+    subcategory: "",
+    merchant: "",
+    paidByType: "company",
+    notes: "",
+  });
 
-    <section className="mt-5 rounded-2xl border border-slate-200/80 bg-white p-5 shadow-[0_5px_20px_rgba(21,36,58,0.035)] sm:p-6"><div className="flex flex-col justify-between gap-4 md:flex-row md:items-center"><div><div className="flex items-center gap-2"><span className="grid size-8 place-items-center rounded-lg bg-[#eaf3ff] text-[#4a87c9]"><CalendarDays size={16} /></span><h2 className="font-display text-[16px] font-bold tracking-[-0.03em] text-[#152239]">Dated operating view</h2></div><p className="mt-2 text-[11px] text-slate-400">A simple month-by-month view until a backend accounting integration is connected.</p></div><div className="flex gap-1 rounded-lg border border-slate-200 bg-slate-50 p-1"><button onClick={() => setKindFilter("all")} className={cn("rounded-md px-2.5 py-1.5 text-[10px] font-bold", kindFilter === "all" ? "bg-white text-slate-700 shadow-sm" : "text-slate-400")}>All</button><button onClick={() => setKindFilter("revenue")} className={cn("rounded-md px-2.5 py-1.5 text-[10px] font-bold", kindFilter === "revenue" ? "bg-white text-[#168465] shadow-sm" : "text-slate-400")}>Revenue</button><button onClick={() => setKindFilter("expense")} className={cn("rounded-md px-2.5 py-1.5 text-[10px] font-bold", kindFilter === "expense" ? "bg-white text-[#bd504d] shadow-sm" : "text-slate-400")}>Expenses</button><button onClick={() => setKindFilter("funding")} className={cn("rounded-md px-2.5 py-1.5 text-[10px] font-bold", kindFilter === "funding" ? "bg-white text-[#4a87c9] shadow-sm" : "text-slate-400")}>Funding</button></div></div><div className="mt-5 grid gap-2 sm:grid-cols-2">{monthly.map((row) => <div key={row.month} className="rounded-xl bg-[#f7f9fb] p-3.5"><div className="flex items-center justify-between"><p className="text-[11px] font-bold text-slate-700">{new Intl.DateTimeFormat("en-ZA", { month: "long", year: "numeric" }).format(new Date(`${row.month}-01T12:00:00`))}</p><span className="text-[10px] font-semibold text-[#c1514d]">{formatZARWithSign(row.net)}</span></div><div className="mt-3 flex h-2 gap-1 overflow-hidden rounded-full bg-slate-200"><span className="rounded-full bg-[#59c9a5]" style={{ width: `${Math.max((row.revenue / Math.max(row.expenses, row.revenue)) * 100, 4)}%` }} /><span className="rounded-full bg-[#e07a72]" style={{ width: `${Math.max((row.expenses / Math.max(row.expenses, row.revenue)) * 100, 4)}%` }} /></div><div className="mt-2 flex justify-between text-[10px] text-slate-400"><span>In {formatZAR(row.revenue)}</span><span>Out {formatZAR(row.expenses)}</span></div></div>)}</div></section>
+  const submitRevenue = (event: FormEvent) => {
+    event.preventDefault();
+    if (revenueForm.amount <= 0 || !revenueForm.revenueType.trim()) return;
+    void createRevenue.mutateAsync(revenueForm);
+    setRevenueForm((current) => ({
+      ...current,
+      amount: 0,
+      description: "",
+    }));
+    setShowAddRevenue(false);
+  };
 
-    <section className="mt-5 rounded-2xl border border-slate-200/80 bg-white shadow-[0_5px_20px_rgba(21,36,58,0.035)]"><div className="flex flex-col gap-3 border-b border-slate-100 p-5 sm:flex-row sm:items-center sm:justify-between sm:p-6"><div><h2 className="font-display text-[16px] font-bold tracking-[-0.03em] text-[#152239]">Transaction records</h2><p className="mt-1 text-[11px] text-slate-400">Edit any record or add a dated revenue, payable, commitment or expense.</p></div><label className="relative"><Filter size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" /><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search records" className="h-9 rounded-xl border border-slate-200 bg-white pl-8 pr-3 text-[11px] outline-none focus:border-[#84cbb8]" /></label></div>{(showAdd || editing) && <div className="p-5 pb-0 sm:p-6 sm:pb-0"><TransactionForm contributors={contributors} transaction={editing ?? defaultTransaction} onCancel={() => { setShowAdd(false); setEditing(null); }} onSave={(transaction) => { if (editing) updateTransaction(editing.id, transaction); else addTransaction(transaction); setShowAdd(false); setEditing(null); }} onDelete={editing ? () => { deleteTransaction(editing.id); setEditing(null); } : undefined} /></div>}<div className="overflow-x-auto"><table className="w-full min-w-[760px] text-left"><thead><tr className="border-b border-slate-100 text-[10px] uppercase tracking-[0.12em] text-slate-400"><th className="px-5 py-3 font-bold sm:px-6">Date</th><th className="px-3 py-3 font-bold">Description</th><th className="px-3 py-3 font-bold">Category</th><th className="px-3 py-3 font-bold">Status</th><th className="px-3 py-3 text-right font-bold">Amount</th><th className="px-5 py-3 text-right font-bold sm:px-6">Edit</th></tr></thead><tbody>{filteredTransactions.map((transaction) => <tr key={transaction.id} className="border-b border-slate-50 text-[11px] last:border-0 hover:bg-slate-50/70"><td className="whitespace-nowrap px-5 py-3.5 text-slate-500 sm:px-6">{formatDate(transaction.date)}</td><td className="px-3 py-3.5"><p className="font-bold text-slate-700">{transaction.description}</p><p className="mt-1 text-[10px] text-slate-400">{transaction.id} · {transaction.owner}{transaction.owedTo ? ` · owed to ${transaction.owedTo}` : ""}</p></td><td className="px-3 py-3.5 text-slate-500">{transaction.category}</td><td className="px-3 py-3.5"><span className={cn("rounded-full px-2 py-1 text-[9px] font-bold", transaction.status === "Paid" ? "bg-[#e8f8f2] text-[#168465]" : transaction.status === "Payable" ? "bg-[#fff2d9] text-[#9a6419]" : "bg-[#eaf3ff] text-[#4a87c9]")}>{transaction.status}</span></td><td className={cn("px-3 py-3.5 text-right font-display font-bold", transaction.kind === "expense" ? "text-[#bd504d]" : "text-[#168465]")}>{transaction.kind === "expense" ? "-" : "+"}{formatZAR(transaction.amount)}</td><td className="px-5 py-3.5 text-right sm:px-6"><div className="inline-flex items-center"><button onClick={() => { setEditing(transaction); setShowAdd(false); }} className="rounded-lg p-2 text-slate-400 hover:bg-white hover:text-[#168465]" aria-label={`Edit ${transaction.description}`}><FilePenLine size={14} /></button><button onClick={() => { if (window.confirm(`Delete ${transaction.description}?`)) deleteTransaction(transaction.id); }} className="rounded-lg p-2 text-slate-400 hover:bg-[#fff0ee] hover:text-[#bd504d]" aria-label={`Delete ${transaction.description}`}><Trash2 size={14} /></button></div></td></tr>)}</tbody></table></div>{filteredTransactions.length === 0 && <div className="p-8 text-center text-[12px] text-slate-400">No transactions match that filter.</div>}</section><div className="mt-5 flex items-center gap-2 text-[10px] text-slate-400"><span className="font-bold text-[#168465]">Finance is a source domain</span><ChevronRight size={13} /> This ledger feeds the executive roll-up.</div></div></AppShell>;
+  const submitExpense = (event: FormEvent) => {
+    event.preventDefault();
+    if (expenseForm.amount <= 0 || !expenseForm.description.trim()) return;
+    void createExpense.mutateAsync(expenseForm);
+    setExpenseForm((current) => ({
+      ...current,
+      amount: 0,
+      description: "",
+      merchant: "",
+      notes: "",
+    }));
+    setShowAddExpense(false);
+  };
+
+  return (
+    <AppShell>
+      <div className="mx-auto max-w-[1440px] px-5 pb-12 pt-8 sm:px-8 xl:px-10">
+        <div className="flex flex-col justify-between gap-5 md:flex-row md:items-end">
+          <div>
+            <div className="mb-3 flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.17em] text-[#bf5b56]">
+              <CircleDollarSign size={13} /> Financial health
+            </div>
+            <h1 className="font-display text-[32px] font-bold tracking-[-0.06em] text-[#152239] sm:text-[39px]">
+              The money view, without the blur.
+            </h1>
+            <p className="mt-2 max-w-[700px] text-[13px] leading-6 text-slate-500">
+              A dated management ledger that keeps revenue and expenses distinct. The current
+              operating position is calculated directly from recorded rows.
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <IfPermitted roleKinds={["ceo", "executive_other", "coo"]}>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowAddRevenue((current) => !current);
+                  setShowAddExpense(false);
+                }}
+                className="inline-flex items-center gap-2 rounded-xl bg-[#182842] px-3.5 py-2.5 text-[11px] font-bold text-white shadow-[0_5px_12px_rgba(20,35,58,.15)] hover:bg-[#233958]"
+              >
+                <Plus size={15} /> Add revenue
+              </button>
+            </IfPermitted>
+            <IfPermitted roleKinds={["ceo", "executive_other", "coo"]}>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowAddExpense((current) => !current);
+                  setShowAddRevenue(false);
+                }}
+                className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-[11px] font-bold text-slate-600 shadow-sm hover:border-slate-300"
+              >
+                <Plus size={15} /> Add expense
+              </button>
+            </IfPermitted>
+          </div>
+        </div>
+
+        <div className="mt-7 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <StatCard
+            label="Recorded revenue"
+            value={formatZAR(totals.revenue)}
+            detail={`${revenue.length} revenue record${revenue.length === 1 ? "" : "s"}`}
+            tone="mint"
+            icon={ArrowUpRight}
+          />
+          <StatCard
+            label="Company expenses"
+            value={formatZAR(totals.expenses)}
+            detail={`${expenses.length} expense row${expenses.length === 1 ? "" : "s"}`}
+            tone="red"
+            icon={ArrowDownRight}
+          />
+          <StatCard
+            label="Operating position"
+            value={`${totals.net < 0 ? "-" : ""}${formatZAR(Math.abs(totals.net)).replace(/^R\s?/, "R ")}`}
+            detail="Revenue less all recorded expenses"
+            tone={totals.net < 0 ? "red" : "mint"}
+            icon={WalletCards}
+          />
+          <StatCard
+            label="Net margin"
+            value={
+              totals.revenue > 0
+                ? `${Math.max(0, Math.min(999, (totals.net / totals.revenue) * 100)).toFixed(1)}%`
+                : "—"
+            }
+            detail="Net ÷ recorded revenue"
+            tone="navy"
+            icon={ReceiptText}
+          />
+        </div>
+
+        {showAddRevenue && (
+          <form
+            onSubmit={submitRevenue}
+            className="mt-6 rounded-2xl border border-[#bfe9da] bg-[#f2fcf8] p-5 sm:p-6"
+          >
+            <div className="flex items-center gap-2">
+              <span className="grid size-8 place-items-center rounded-lg bg-[#e8f8f2] text-[#168465]">
+                <ArrowUpRight size={16} />
+              </span>
+              <h2 className="font-display text-[16px] font-bold text-[#152239]">
+                Record revenue
+              </h2>
+            </div>
+            <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              <label className="text-[10px] font-bold text-slate-500">
+                Date
+                <input
+                  type="date"
+                  required
+                  value={revenueForm.revenueDate}
+                  onChange={(e) =>
+                    setRevenueForm((current) => ({
+                      ...current,
+                      revenueDate: e.target.value,
+                    }))
+                  }
+                  className="form-input"
+                />
+              </label>
+              <label className="text-[10px] font-bold text-slate-500">
+                Revenue type
+                <input
+                  required
+                  value={revenueForm.revenueType}
+                  onChange={(e) =>
+                    setRevenueForm((current) => ({
+                      ...current,
+                      revenueType: e.target.value,
+                    }))
+                  }
+                  className="form-input"
+                  placeholder="e.g. Service, Commission"
+                />
+              </label>
+              <label className="text-[10px] font-bold text-slate-500">
+                Amount (ZAR)
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  required
+                  value={revenueForm.amount || ""}
+                  onChange={(e) =>
+                    setRevenueForm((current) => ({
+                      ...current,
+                      amount: Number(e.target.value),
+                    }))
+                  }
+                  className="form-input"
+                />
+              </label>
+              <label className="text-[10px] font-bold text-slate-500">
+                Status
+                <select
+                  value={revenueForm.status}
+                  onChange={(e) =>
+                    setRevenueForm((current) => ({
+                      ...current,
+                      status: e.target.value as RevenueInput["status"],
+                    }))
+                  }
+                  className="form-input"
+                >
+                  <option value="recognized">Recognized</option>
+                  <option value="pending">Pending</option>
+                  <option value="refunded">Refunded</option>
+                  <option value="reversed">Reversed</option>
+                </select>
+              </label>
+              <label className="text-[10px] font-bold text-slate-500 sm:col-span-2 lg:col-span-4">
+                Description
+                <input
+                  value={revenueForm.description ?? ""}
+                  onChange={(e) =>
+                    setRevenueForm((current) => ({
+                      ...current,
+                      description: e.target.value,
+                    }))
+                  }
+                  className="form-input"
+                  placeholder="e.g. October consulting retainer"
+                />
+              </label>
+            </div>
+            <div className="mt-4 flex justify-end">
+              <button
+                type="submit"
+                className="inline-flex items-center gap-2 rounded-xl bg-[#168465] px-4 py-2.5 text-[11px] font-bold text-white"
+              >
+                <Save size={14} /> Save revenue
+              </button>
+            </div>
+          </form>
+        )}
+
+        {showAddExpense && (
+          <form
+            onSubmit={submitExpense}
+            className="mt-6 rounded-2xl border border-[#f0cdca] bg-[#fff8f7] p-5 sm:p-6"
+          >
+            <div className="flex items-center gap-2">
+              <span className="grid size-8 place-items-center rounded-lg bg-[#ffe9e6] text-[#bf5b56]">
+                <ArrowDownRight size={16} />
+              </span>
+              <h2 className="font-display text-[16px] font-bold text-[#152239]">
+                Record expense
+              </h2>
+            </div>
+            <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              <label className="text-[10px] font-bold text-slate-500">
+                Date
+                <input
+                  type="date"
+                  required
+                  value={expenseForm.expenseDate}
+                  onChange={(e) =>
+                    setExpenseForm((current) => ({
+                      ...current,
+                      expenseDate: e.target.value,
+                    }))
+                  }
+                  className="form-input"
+                />
+              </label>
+              <label className="text-[10px] font-bold text-slate-500">
+                Amount (ZAR)
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  required
+                  value={expenseForm.amount || ""}
+                  onChange={(e) =>
+                    setExpenseForm((current) => ({
+                      ...current,
+                      amount: Number(e.target.value),
+                    }))
+                  }
+                  className="form-input"
+                />
+              </label>
+              <label className="text-[10px] font-bold text-slate-500">
+                Merchant
+                <input
+                  value={expenseForm.merchant ?? ""}
+                  onChange={(e) =>
+                    setExpenseForm((current) => ({
+                      ...current,
+                      merchant: e.target.value,
+                    }))
+                  }
+                  className="form-input"
+                  placeholder="e.g. AWS, Payroll"
+                />
+              </label>
+              <label className="text-[10px] font-bold text-slate-500">
+                Subcategory
+                <input
+                  value={expenseForm.subcategory ?? ""}
+                  onChange={(e) =>
+                    setExpenseForm((current) => ({
+                      ...current,
+                      subcategory: e.target.value,
+                    }))
+                  }
+                  className="form-input"
+                  placeholder="Salaries, Hosting…"
+                />
+              </label>
+              <label className="text-[10px] font-bold text-slate-500 sm:col-span-2 lg:col-span-4">
+                Description
+                <input
+                  required
+                  value={expenseForm.description}
+                  onChange={(e) =>
+                    setExpenseForm((current) => ({
+                      ...current,
+                      description: e.target.value,
+                    }))
+                  }
+                  className="form-input"
+                  placeholder="e.g. October salaries payable"
+                />
+              </label>
+              <label className="text-[10px] font-bold text-slate-500">
+                Paid by
+                <select
+                  value={expenseForm.paidByType}
+                  onChange={(e) =>
+                    setExpenseForm((current) => ({
+                      ...current,
+                      paidByType: e.target.value as ExpenseInput["paidByType"],
+                    }))
+                  }
+                  className="form-input"
+                >
+                  <option value="company">Company</option>
+                  <option value="founder">Founder</option>
+                  <option value="employee">Employee</option>
+                  <option value="other">Other</option>
+                </select>
+              </label>
+              <label className="text-[10px] font-bold text-slate-500 sm:col-span-2 lg:col-span-3">
+                Notes
+                <input
+                  value={expenseForm.notes ?? ""}
+                  onChange={(e) =>
+                    setExpenseForm((current) => ({
+                      ...current,
+                      notes: e.target.value,
+                    }))
+                  }
+                  className="form-input"
+                  placeholder="Approval context or reference"
+                />
+              </label>
+            </div>
+            <div className="mt-4 flex justify-end">
+              <button
+                type="submit"
+                className="inline-flex items-center gap-2 rounded-xl bg-[#bf5b56] px-4 py-2.5 text-[11px] font-bold text-white"
+              >
+                <Save size={14} /> Save expense
+              </button>
+            </div>
+          </form>
+        )}
+
+        <section className="mt-6 rounded-2xl border border-slate-200/80 bg-white shadow-[0_5px_20px_rgba(21,36,58,0.035)]">
+          <div className="flex flex-col justify-between gap-3 border-b border-slate-100 p-5 sm:flex-row sm:items-center sm:p-6">
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="grid size-8 place-items-center rounded-lg bg-[#e8f8f2] text-[#168465]">
+                  <ArrowUpRight size={16} />
+                </span>
+                <h2 className="font-display text-[16px] font-bold text-[#152239]">
+                  Revenue records
+                </h2>
+              </div>
+              <p className="mt-2 text-[11px] text-slate-400">
+                Recognized and pending revenue, newest first.
+              </p>
+            </div>
+            <div className="text-[11px] font-bold text-[#168465]">
+              Total {formatZAR(totals.revenue)}
+            </div>
+          </div>
+          {revenueState === "loading" && <SectionLoading label="revenue" />}
+          {revenueState === "error" && (
+            <SectionError label="revenue" message={financeQuery.error?.message} />
+          )}
+          {revenueState === "empty" && (
+            <SectionEmpty
+              label="revenue records"
+              hint="Click Add revenue to record the first inflow."
+            />
+          )}
+          {revenueState === "ready" && (
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[640px] text-left">
+                <thead>
+                  <tr className="border-b border-slate-100 text-[10px] uppercase tracking-[0.12em] text-slate-400">
+                    <th className="px-5 py-3 font-bold sm:px-6">Date</th>
+                    <th className="px-3 py-3 font-bold">Description</th>
+                    <th className="px-3 py-3 font-bold">Type</th>
+                    <th className="px-3 py-3 font-bold">Status</th>
+                    <th className="px-3 py-3 text-right font-bold">Amount</th>
+                    <th className="px-5 py-3 text-right font-bold sm:px-6">Remove</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {[...revenue]
+                    .sort((a, b) => b.revenue_date.localeCompare(a.revenue_date))
+                    .map((row) => (
+                      <tr
+                        key={row.id}
+                        className="border-b border-slate-50 text-[11px] last:border-0 hover:bg-slate-50/70"
+                      >
+                        <td className="whitespace-nowrap px-5 py-3.5 text-slate-500 sm:px-6">
+                          {formatDate(row.revenue_date)}
+                        </td>
+                        <td className="px-3 py-3.5">
+                          <p className="font-bold text-slate-700">
+                            {row.description ?? row.revenue_type}
+                          </p>
+                          <p className="mt-1 text-[10px] text-slate-400">{row.id}</p>
+                        </td>
+                        <td className="px-3 py-3.5 text-slate-500">{row.revenue_type}</td>
+                        <td className="px-3 py-3.5">
+                          <span
+                            className={cn(
+                              "rounded-full px-2 py-1 text-[9px] font-bold",
+                              row.status === "recognized"
+                                ? "bg-[#e8f8f2] text-[#168465]"
+                                : row.status === "pending"
+                                  ? "bg-[#fff2d9] text-[#9a6419]"
+                                  : "bg-slate-100 text-slate-500",
+                            )}
+                          >
+                            {row.status}
+                          </span>
+                        </td>
+                        <td className="px-3 py-3.5 text-right font-display font-bold text-[#168465]">
+                          +{formatZAR(row.amount)}
+                        </td>
+                        <td className="px-5 py-3.5 text-right sm:px-6">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (
+                                window.confirm(
+                                  `Delete this revenue record (${formatZAR(row.amount)})?`,
+                                )
+                              ) {
+                                void deleteRevenue.mutateAsync(row.id);
+                              }
+                            }}
+                            className="rounded-lg p-2 text-slate-400 hover:bg-[#fff0ee] hover:text-[#bd504d]"
+                            aria-label="Delete revenue"
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+
+        <section className="mt-5 rounded-2xl border border-slate-200/80 bg-white shadow-[0_5px_20px_rgba(21,36,58,0.035)]">
+          <div className="flex flex-col justify-between gap-3 border-b border-slate-100 p-5 sm:flex-row sm:items-center sm:p-6">
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="grid size-8 place-items-center rounded-lg bg-[#ffe9e6] text-[#bf5b56]">
+                  <ArrowDownRight size={16} />
+                </span>
+                <h2 className="font-display text-[16px] font-bold text-[#152239]">
+                  Expense records
+                </h2>
+              </div>
+              <p className="mt-2 text-[11px] text-slate-400">
+                All outflows, newest first. Totals match the summary cards above.
+              </p>
+            </div>
+            <div className="text-[11px] font-bold text-[#bd504d]">
+              Total {formatZAR(totals.expenses)}
+            </div>
+          </div>
+          {expensesState === "loading" && <SectionLoading label="expenses" />}
+          {expensesState === "error" && (
+            <SectionError label="expenses" message={financeQuery.error?.message} />
+          )}
+          {expensesState === "empty" && (
+            <SectionEmpty
+              label="expense records"
+              hint="Click Add expense to record the first outflow."
+            />
+          )}
+          {expensesState === "ready" && (
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[640px] text-left">
+                <thead>
+                  <tr className="border-b border-slate-100 text-[10px] uppercase tracking-[0.12em] text-slate-400">
+                    <th className="px-5 py-3 font-bold sm:px-6">Date</th>
+                    <th className="px-3 py-3 font-bold">Description</th>
+                    <th className="px-3 py-3 font-bold">Merchant</th>
+                    <th className="px-3 py-3 font-bold">Paid by</th>
+                    <th className="px-3 py-3 text-right font-bold">Amount</th>
+                    <th className="px-5 py-3 text-right font-bold sm:px-6">Remove</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {[...expenses]
+                    .sort((a, b) => b.expense_date.localeCompare(a.expense_date))
+                    .map((row) => (
+                      <tr
+                        key={row.id}
+                        className="border-b border-slate-50 text-[11px] last:border-0 hover:bg-slate-50/70"
+                      >
+                        <td className="whitespace-nowrap px-5 py-3.5 text-slate-500 sm:px-6">
+                          {formatDate(row.expense_date)}
+                        </td>
+                        <td className="px-3 py-3.5">
+                          <p className="font-bold text-slate-700">{row.description}</p>
+                          <p className="mt-1 text-[10px] text-slate-400">
+                            {row.approval_status} approval · {row.reimbursement_status}
+                          </p>
+                        </td>
+                        <td className="px-3 py-3.5 text-slate-500">
+                          {row.requires_review ? "Review" : "—"}
+                        </td>
+                        <td className="px-3 py-3.5">
+                          <span className="rounded-full bg-slate-100 px-2 py-1 text-[9px] font-bold text-slate-600">
+                            {row.paid_by_type}
+                          </span>
+                        </td>
+                        <td className="px-3 py-3.5 text-right font-display font-bold text-[#bd504d]">
+                          -{formatZAR(row.amount)}
+                        </td>
+                        <td className="px-5 py-3.5 text-right sm:px-6">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (
+                                window.confirm(
+                                  `Delete this expense record (${formatZAR(row.amount)})?`,
+                                )
+                              ) {
+                                void deleteExpense.mutateAsync(row.id);
+                              }
+                            }}
+                            className="rounded-lg p-2 text-slate-400 hover:bg-[#fff0ee] hover:text-[#bd504d]"
+                            aria-label="Delete expense"
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+      </div>
+    </AppShell>
+  );
 }

@@ -162,20 +162,32 @@ function formatLiveDate(value: string | null) {
 
 function ErrorState({
   message = "This section could not be loaded.",
+  onRetry,
 }: {
   message?: string;
+  onRetry?: () => void;
 }) {
   return (
-    <p className="rounded-xl border border-[#f0cdca] bg-[#fff8f7] p-3 text-[11px] leading-5 text-[#a34f4b]">
-      {message} Try again after the connection is available.
-    </p>
+    <div className="rounded-xl border border-[#f0cdca] bg-[#fff8f7] p-3">
+      <p className="text-[11px] leading-5 text-[#a34f4b]">
+        {message} Try again after the connection is available.
+      </p>
+      {onRetry && (
+        <button
+          onClick={onRetry}
+          className="mt-2 rounded-lg bg-[#bd504d] px-3 py-1.5 text-[10px] font-bold text-white transition hover:bg-[#a34f4b]"
+        >
+          Retry
+        </button>
+      )}
+    </div>
   );
 }
 
-function LoadingState() {
+function LoadingState({ message = "Loading live data…" }: { message?: string }) {
   return (
     <p className="rounded-xl bg-[#f7f9fb] p-3 text-[11px] text-slate-400">
-      Loading live data...
+      {message}
     </p>
   );
 }
@@ -353,7 +365,7 @@ function WorkSummary({ records }: { records: WorkRecord[] }) {
   return { open, inProgress, completed, overdue };
 }
 
-export default function Index() {
+export function CeoDashboard() {
   const organisationState = useCurrentOrganisation();
   const { people, operations, kpis, finance } = useExecutiveSummary();
   const alerts = useExecutiveAlerts();
@@ -393,25 +405,48 @@ export default function Index() {
   const technologyData = technologyDashboard.data;
   const technologyError =
     technologyDashboard.isError || Boolean(technologyData?.optionalErrors.length);
-  const productMetrics = [
-    { label: "Roadmaps", value: technologyData?.roadmaps.length ?? 0 },
-    { label: "Backlog", value: technologyData?.items.length ?? 0 },
-    { label: "Releases", value: technologyData?.releases.length ?? 0 },
-    { label: "Feedback", value: technologyData?.feedback.length ?? 0 },
-  ];
-  const engineeringMetrics = [
-    { label: "Projects", value: technologyData?.projects.length ?? 0 },
-    { label: "Deployments", value: technologyData?.deployments.length ?? 0 },
-    { label: "Releases", value: technologyData?.releases.length ?? 0 },
-    { label: "Work links", value: technologyData ? technologyData.tasks.length + technologyData.tickets.length : 0 },
-  ];
-  const securityMetrics = [
-    { label: "Controls", value: technologyData?.controls.length ?? 0 },
-    { label: "Tests", value: technologyData?.securityTests.length ?? 0 },
-    { label: "Findings", value: technologyData?.findings.length ?? 0 },
-    { label: "Incidents", value: technologyData?.incidents.length ?? 0 },
-    { label: "Remediations", value: technologyData?.remediations.length ?? 0 },
-  ];
+  const technologyHasData = !technologyDashboard.isPending && !technologyError && Boolean(technologyData);
+  const productMetrics = technologyHasData
+    ? [
+        { label: "Roadmaps", value: technologyData.roadmaps.length },
+        { label: "Backlog", value: technologyData.items.length },
+        { label: "Releases", value: technologyData.releases.length },
+        { label: "Feedback", value: technologyData.feedback.length },
+      ]
+    : [
+        { label: "Roadmaps", value: 0 },
+        { label: "Backlog", value: 0 },
+        { label: "Releases", value: 0 },
+        { label: "Feedback", value: 0 },
+      ];
+  const engineeringMetrics = technologyHasData
+    ? [
+        { label: "Projects", value: technologyData.projects.length },
+        { label: "Deployments", value: technologyData.deployments.length },
+        { label: "Releases", value: technologyData.releases.length },
+        { label: "Work links", value: technologyData.tasks.length + technologyData.tickets.length },
+      ]
+    : [
+        { label: "Projects", value: 0 },
+        { label: "Deployments", value: 0 },
+        { label: "Releases", value: 0 },
+        { label: "Work links", value: 0 },
+      ];
+  const securityMetrics = technologyHasData
+    ? [
+        { label: "Controls", value: technologyData.controls.length },
+        { label: "Tests", value: technologyData.securityTests.length },
+        { label: "Findings", value: technologyData.findings.length },
+        { label: "Incidents", value: technologyData.incidents.length },
+        { label: "Remediations", value: technologyData.remediations.length },
+      ]
+    : [
+        { label: "Controls", value: 0 },
+        { label: "Tests", value: 0 },
+        { label: "Findings", value: 0 },
+        { label: "Incidents", value: 0 },
+        { label: "Remediations", value: 0 },
+      ];
   const executiveAreas: ExecutiveArea[] = [
     {
       title: "Product",
@@ -492,18 +527,28 @@ export default function Index() {
     },
     {
       label: "Open work",
-      value: workRows.length ? openWorkValue : "Awaiting live data",
-      change: operations.isError
-        ? "data unavailable"
-        : workRows.length
-          ? `${workSummary.overdue} overdue`
-          : "no records",
+      value: operations.isPending
+        ? "Loading..."
+        : operations.isError
+          ? "Unavailable"
+          : workRows.length
+            ? String(workSummary.open)
+            : "Awaiting live data",
+      change: operations.isPending
+        ? "loading live data"
+        : operations.isError
+          ? "data unavailable"
+          : workRows.length
+            ? `${workSummary.overdue} overdue`
+            : "no records",
       helper: "Tasks and tickets · live backend records",
-      status: operations.isError
-        ? "critical"
-        : workSummary.overdue
+      status: operations.isPending
+        ? "attention"
+        : operations.isError
           ? "critical"
-          : "attention",
+          : workSummary.overdue
+            ? "critical"
+            : "attention",
       icon: Layers3,
     },
     {
@@ -559,9 +604,81 @@ export default function Index() {
             </div>
           </div>
           <div className="mt-7 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
-            {metrics.map((metric) => (
-              <MetricCard key={metric.label} metric={metric} />
-            ))}
+            {finance.isPending ? (
+              <div className="contents">
+                <div key="finance-loading">
+                  <LoadingState message="Loading live finance…" />
+                </div>
+              </div>
+            ) : finance.isError ? (
+              <div key="finance-error">
+                <ErrorState message="Finance records could not be loaded." onRetry={() => finance.refetch()} />
+              </div>
+            ) : !financeSummary.recognizedRevenueRecords && !financeSummary.expenseRecords ? (
+              <div key="finance-empty">
+                <MetricCard metric={metrics[0]} />
+              </div>
+            ) : (
+              <div key="finance-content">
+                <MetricCard metric={metrics[0]} />
+              </div>
+            )}
+
+            {people.isPending ? (
+              <div className="sm:col-span-2 xl:col-span-2">
+                <LoadingState message="Loading live people…" />
+              </div>
+            ) : people.isError ? (
+              <div className="sm:col-span-2 xl:col-span-2">
+                <ErrorState message="People records could not be loaded." onRetry={() => people.refetch()} />
+              </div>
+            ) : !employeeRows.length && !departmentRows.length ? (
+              <div className="contents">
+                <div key="people-empty-1"><EmptyState>No people yet.</EmptyState></div>
+                <div key="people-empty-2"><EmptyState>No departments yet.</EmptyState></div>
+              </div>
+            ) : (
+              <div className="contents">
+                <div key="people-active"><MetricCard metric={metrics[1]} /></div>
+                <div key="people-depts"><MetricCard metric={metrics[2]} /></div>
+              </div>
+            )}
+
+            {operations.isPending ? (
+              <div>
+                <LoadingState message="Loading live operations…" />
+              </div>
+            ) : operations.isError ? (
+              <div>
+                <ErrorState message="Operations work queue could not be loaded." onRetry={() => operations.refetch()} />
+              </div>
+            ) : !deadlineRows.length && !workRows.length ? (
+              <div>
+                <MetricCard metric={metrics[3]} />
+              </div>
+            ) : (
+              <div>
+                <MetricCard metric={metrics[3]} />
+              </div>
+            )}
+
+            {kpis.isPending ? (
+              <div>
+                <LoadingState message="Loading live KPIs…" />
+              </div>
+            ) : kpis.isError ? (
+              <div>
+                <ErrorState message="KPI records could not be loaded." onRetry={() => kpis.refetch()} />
+              </div>
+            ) : !kpiResults.length ? (
+              <div>
+                <EmptyState>No KPIs yet.</EmptyState>
+              </div>
+            ) : (
+              <div>
+                <MetricCard metric={metrics[4]} />
+              </div>
+            )}
           </div>
         </section>
 
@@ -598,54 +715,60 @@ export default function Index() {
               }
             />
           </div>
-          <div className="mt-5 grid gap-3 md:grid-cols-3">
-            <div className="rounded-xl bg-white p-4">
-              <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-slate-400">
-                Organisation context
-              </p>
-              <p className="mt-2 font-display text-[22px] font-bold text-[#152239]">
-                {organisationName}
-              </p>
-              <p className="mt-2 text-[11px] leading-5 text-slate-500">
-                Resolved through the authenticated employee relationship.
-              </p>
+          {people.isPending ? (
+            <div className="mt-5">
+              <LoadingState message="Loading live people…" />
             </div>
-            <div className="rounded-xl bg-white p-4">
-              <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-slate-400">
-                Active employees
-              </p>
-              <p className="mt-2 font-display text-[25px] font-bold text-[#152239]">
-                {people.isPending
-                  ? "Loading..."
-                  : people.isError
-                    ? "Unavailable"
-                    : employeeRows.length
-                      ? String(activeEmployeeCount)
-                      : "Awaiting live data"}
-              </p>
-              <p className="mt-2 text-[11px] leading-5 text-slate-500">
-                Derived from employee status values returned by the backend.
-              </p>
+          ) : people.isError ? (
+            <div className="mt-5">
+              <ErrorState message="People records could not be loaded." onRetry={() => people.refetch()} />
             </div>
-            <div className="rounded-xl bg-white p-4">
-              <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-slate-400">
-                Departments
-              </p>
-              <p className="mt-2 font-display text-[25px] font-bold text-[#152239]">
-                {people.isPending
-                  ? "Loading..."
-                  : people.isError
-                    ? "Unavailable"
-                    : departmentRows.length
-                      ? String(departmentRows.length)
-                      : "Awaiting live data"}
-              </p>
-              <p className="mt-2 text-[11px] leading-5 text-slate-500">
-                Department records visible through the current organisation
-                scope.
-              </p>
+          ) : !employeeRows.length && !departmentRows.length ? (
+            <div className="mt-5">
+              <EmptyState>No people yet.</EmptyState>
             </div>
-          </div>
+          ) : (
+            <div className="mt-5 grid gap-3 md:grid-cols-3">
+              <div className="rounded-xl bg-white p-4">
+                <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-slate-400">
+                  Organisation context
+                </p>
+                <p className="mt-2 font-display text-[22px] font-bold text-[#152239]">
+                  {organisationName}
+                </p>
+                <p className="mt-2 text-[11px] leading-5 text-slate-500">
+                  Resolved through the authenticated employee relationship.
+                </p>
+              </div>
+              <div className="rounded-xl bg-white p-4">
+                <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-slate-400">
+                  Active employees
+                </p>
+                <p className="mt-2 font-display text-[25px] font-bold text-[#152239]">
+                  {employeeRows.length
+                    ? String(activeEmployeeCount)
+                    : "Awaiting live data"}
+                </p>
+                <p className="mt-2 text-[11px] leading-5 text-slate-500">
+                  Derived from employee status values returned by the backend.
+                </p>
+              </div>
+              <div className="rounded-xl bg-white p-4">
+                <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-slate-400">
+                  Departments
+                </p>
+                <p className="mt-2 font-display text-[25px] font-bold text-[#152239]">
+                  {departmentRows.length
+                    ? String(departmentRows.length)
+                    : "Awaiting live data"}
+                </p>
+                <p className="mt-2 text-[11px] leading-5 text-slate-500">
+                  Department records visible through the current organisation
+                  scope.
+                </p>
+              </div>
+            </div>
+          )}
         </section>
 
         <section id="governance" className="mt-5">
@@ -673,14 +796,14 @@ export default function Index() {
               </span>
             </div>
             <div className="mt-4 space-y-2">
-              <RecordState
-                pending={alerts.isPending}
-                error={alerts.isError}
-                empty={
-                  !alerts.isPending && !alerts.isError && !alertRows.length
-                }
-              >
-                {alertRows.slice(0, 4).map((alert) => (
+              {alerts.isPending ? (
+                <LoadingState message="Loading live alerts…" />
+              ) : alerts.isError ? (
+                <ErrorState message="Live alerts could not be loaded." onRetry={() => alerts.refetch()} />
+              ) : !alertRows.length ? (
+                <EmptyState>No alerts yet.</EmptyState>
+              ) : (
+                alertRows.slice(0, 4).map((alert) => (
                   <div
                     key={alert.id}
                     className="rounded-xl border border-slate-100 bg-[#f8fafc] p-3"
@@ -698,8 +821,8 @@ export default function Index() {
                       {alert.message || "No alert detail provided."}
                     </p>
                   </div>
-                ))}
-              </RecordState>
+                ))
+              )}
             </div>
           </article>
         </section>
@@ -729,70 +852,75 @@ export default function Index() {
                     : `${workSummary.open} open`}
               </span>
             </div>
-            <RecordState
-              pending={operations.isPending}
-              error={operations.isError}
-              empty={
-                !operations.isPending &&
-                !operations.isError &&
-                !deadlineRows.length &&
-                !workRows.length
-              }
-            >
-              <div className="mt-4 grid gap-3 sm:grid-cols-2">
-                <div className="rounded-xl bg-[#f7f9fb] p-3.5">
-                  <p className="text-[10px] font-medium text-slate-400">
-                    Tasks and tickets
-                  </p>
-                  <p className="mt-2 font-display text-[22px] font-bold text-[#152239]">
-                    {workSummary.open}
-                  </p>
-                  <p className="mt-1 text-[10px] text-slate-400">
-                    {`${workSummary.inProgress} in progress · ${workSummary.completed} completed · ${workSummary.overdue} overdue`}
-                  </p>
-                </div>
-                <div className="rounded-xl bg-[#f7f9fb] p-3.5">
-                  <p className="text-[10px] font-medium text-slate-400">
-                    Upcoming deadlines
-                  </p>
-                  <p className="mt-2 font-display text-[22px] font-bold text-[#152239]">
-                    {deadlineRows.length}
-                  </p>
-                  <p className="mt-1 text-[10px] text-slate-400">
-                    {deadlineRows.length
-                      ? "Open deadline records"
-                      : "No upcoming deadlines"}
-                  </p>
-                </div>
+            {operations.isPending ? (
+              <div className="mt-4">
+                <LoadingState message="Loading live operations…" />
               </div>
-              <div className="mt-4 space-y-2">
-                {deadlineRows.slice(0, 4).map((deadline) => (
-                  <div
-                    key={deadline.id}
-                    className="flex items-center gap-3 rounded-xl border border-slate-100 p-3"
-                  >
-                    <span className="grid size-8 shrink-0 place-items-center rounded-lg bg-[#eef4fb] text-[#5488be]">
-                      <CalendarDays size={15} />
-                    </span>
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate text-[11px] font-bold text-slate-700">
-                        {deadline.title || "Deadline"}
-                      </p>
-                      <p className="mt-1 text-[10px] text-slate-400">
-                        {formatLiveDate(deadline.due_at)}
-                        {deadline.owner_employee_id &&
-                        employeeNames.get(deadline.owner_employee_id)
-                          ? ` · ${employeeNames.get(deadline.owner_employee_id)}`
-                          : ""}
-                      </p>
-                    </div>
-                    <span className="text-[10px] font-semibold text-slate-500">
-                      {deadline.status || "Status not provided"}
-                    </span>
+            ) : operations.isError ? (
+              <div className="mt-4">
+                <ErrorState message="Deadlines and work queue could not be loaded." onRetry={() => operations.refetch()} />
+              </div>
+            ) : !deadlineRows.length && !workRows.length ? (
+              <div className="mt-4">
+                <EmptyState>No open work yet.</EmptyState>
+              </div>
+            ) : (
+              <>
+                <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                  <div className="rounded-xl bg-[#f7f9fb] p-3.5">
+                    <p className="text-[10px] font-medium text-slate-400">
+                      Tasks and tickets
+                    </p>
+                    <p className="mt-2 font-display text-[22px] font-bold text-[#152239]">
+                      {workSummary.open}
+                    </p>
+                    <p className="mt-1 text-[10px] text-slate-400">
+                      {`${workSummary.inProgress} in progress · ${workSummary.completed} completed · ${workSummary.overdue} overdue`}
+                    </p>
                   </div>
-                ))}
-              </div>
-            </RecordState>
+                  <div className="rounded-xl bg-[#f7f9fb] p-3.5">
+                    <p className="text-[10px] font-medium text-slate-400">
+                      Upcoming deadlines
+                    </p>
+                    <p className="mt-2 font-display text-[22px] font-bold text-[#152239]">
+                      {deadlineRows.length}
+                    </p>
+                    <p className="mt-1 text-[10px] text-slate-400">
+                      {deadlineRows.length
+                        ? "Open deadline records"
+                        : "No upcoming deadlines"}
+                    </p>
+                  </div>
+                </div>
+                <div className="mt-4 space-y-2">
+                  {deadlineRows.slice(0, 4).map((deadline) => (
+                    <div
+                      key={deadline.id}
+                      className="flex items-center gap-3 rounded-xl border border-slate-100 p-3"
+                    >
+                      <span className="grid size-8 shrink-0 place-items-center rounded-lg bg-[#eef4fb] text-[#5488be]">
+                        <CalendarDays size={15} />
+                      </span>
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-[11px] font-bold text-slate-700">
+                          {deadline.title || "Deadline"}
+                        </p>
+                        <p className="mt-1 text-[10px] text-slate-400">
+                          {formatLiveDate(deadline.due_at)}
+                          {deadline.owner_employee_id &&
+                          employeeNames.get(deadline.owner_employee_id)
+                            ? ` · ${employeeNames.get(deadline.owner_employee_id)}`
+                            : ""}
+                        </p>
+                      </div>
+                      <span className="text-[10px] font-semibold text-slate-500">
+                        {deadline.status || "Status not provided"}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
           </article>
 
           <article className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-[0_5px_20px_rgba(21,36,58,0.035)] sm:p-6">
@@ -818,76 +946,80 @@ export default function Index() {
                 Open KPIs <ChevronRight size={14} />
               </Link>
             </div>
-            <RecordState
-              pending={kpis.isPending}
-              error={kpis.isError}
-              empty={!kpis.isPending && !kpis.isError && !kpiResults.length}
-            >
-              {kpiResults.length ? (
-                <div className="mt-4 space-y-2">
-                  {kpiRows.slice(0, 5).map((kpi) => {
-                    const displayStatus = statusToDisplay(kpi.status);
-                    const variance =
-                      kpi.actual !== null && kpi.target !== null
-                        ? kpi.actual - kpi.target
-                        : null;
-                    return (
-                      <div
-                        key={kpi.id}
-                        className="rounded-xl border border-slate-100 p-3"
-                      >
-                        <div className="flex items-start justify-between gap-3">
-                          <div>
-                            <p className="text-[11px] font-bold text-slate-700">
-                              {kpi.name}
-                            </p>
-                            <p className="mt-1 text-[10px] text-slate-400">
-                              {kpi.periodName ?? "Period not provided"}
-                              {kpi.ownerEmployeeId &&
-                              employeeNames.get(kpi.ownerEmployeeId)
-                                ? ` · ${employeeNames.get(kpi.ownerEmployeeId)}`
-                                : ""}
-                            </p>
-                          </div>
-                          {displayStatus ? (
-                            <StatusPill
-                              status={displayStatus}
-                              label={kpi.status || undefined}
-                            />
-                          ) : (
-                            <span className="text-[10px] text-slate-400">
-                              Status not provided
-                            </span>
-                          )}
+            {kpis.isPending ? (
+              <div className="mt-4">
+                <LoadingState message="Loading live KPIs…" />
+              </div>
+            ) : kpis.isError ? (
+              <div className="mt-4">
+                <ErrorState message="KPI records could not be loaded." onRetry={() => kpis.refetch()} />
+              </div>
+            ) : !kpiResults.length ? (
+              <div className="mt-4">
+                <EmptyState>No KPIs yet.</EmptyState>
+              </div>
+            ) : (
+              <div className="mt-4 space-y-2">
+                {kpiRows.slice(0, 5).map((kpi) => {
+                  const displayStatus = statusToDisplay(kpi.status);
+                  const variance =
+                    kpi.actual !== null && kpi.target !== null
+                      ? kpi.actual - kpi.target
+                      : null;
+                  return (
+                    <div
+                      key={kpi.id}
+                      className="rounded-xl border border-slate-100 p-3"
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <p className="text-[11px] font-bold text-slate-700">
+                            {kpi.name}
+                          </p>
+                          <p className="mt-1 text-[10px] text-slate-400">
+                            {kpi.periodName ?? "Period not provided"}
+                            {kpi.ownerEmployeeId &&
+                            employeeNames.get(kpi.ownerEmployeeId)
+                              ? ` · ${employeeNames.get(kpi.ownerEmployeeId)}`
+                              : ""}
+                          </p>
                         </div>
-                        <div className="mt-3 grid grid-cols-3 gap-2 text-[10px]">
-                          <span className="rounded-lg bg-[#f7f9fb] p-2 text-slate-500">
-                            Target
-                            <strong className="mt-1 block text-[12px] text-slate-700">
-                              {kpi.target ?? "—"}
-                            </strong>
+                        {displayStatus ? (
+                          <StatusPill
+                            status={displayStatus}
+                            label={kpi.status || undefined}
+                          />
+                        ) : (
+                          <span className="text-[10px] text-slate-400">
+                            Status not provided
                           </span>
-                          <span className="rounded-lg bg-[#f7f9fb] p-2 text-slate-500">
-                            Actual
-                            <strong className="mt-1 block text-[12px] text-slate-700">
-                              {kpi.actual ?? "—"}
-                            </strong>
-                          </span>
-                          <span className="rounded-lg bg-[#f7f9fb] p-2 text-slate-500">
-                            Variance
-                            <strong className="mt-1 block text-[12px] text-slate-700">
-                              {variance ?? "—"}
-                            </strong>
-                          </span>
-                        </div>
+                        )}
                       </div>
-                    );
-                  })}
-                </div>
-              ) : (
-                <EmptyState>No KPI results for this period.</EmptyState>
-              )}
-            </RecordState>
+                      <div className="mt-3 grid grid-cols-3 gap-2 text-[10px]">
+                        <span className="rounded-lg bg-[#f7f9fb] p-2 text-slate-500">
+                          Target
+                          <strong className="mt-1 block text-[12px] text-slate-700">
+                            {kpi.target ?? "—"}
+                          </strong>
+                        </span>
+                        <span className="rounded-lg bg-[#f7f9fb] p-2 text-slate-500">
+                          Actual
+                          <strong className="mt-1 block text-[12px] text-slate-700">
+                            {kpi.actual ?? "—"}
+                          </strong>
+                        </span>
+                        <span className="rounded-lg bg-[#f7f9fb] p-2 text-slate-500">
+                          Variance
+                          <strong className="mt-1 block text-[12px] text-slate-700">
+                            {variance ?? "—"}
+                          </strong>
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </article>
         </section>
 
@@ -914,46 +1046,49 @@ export default function Index() {
               Open financial ledger <ChevronRight size={14} />
             </Link>
           </div>
-          <RecordState
-            pending={finance.isPending}
-            error={finance.isError}
-            empty={
-              !finance.isPending &&
-              !finance.isError &&
-              !financeSummary.recognizedRevenueRecords &&
-              !financeSummary.expenseRecords
-            }
-          >
-            <div className="mt-5 grid gap-3 sm:grid-cols-3">
-              <FinanceValue
-                label="Recorded revenue"
-                value={
-                  financeSummary.recognizedRevenueRecords
-                    ? formatMoneyBuckets(financeSummary.revenue)
-                    : "Awaiting live data"
-                }
-              />
-              <FinanceValue
-                label="Company expenses"
-                value={
-                  financeSummary.expenseRecords
-                    ? formatMoneyBuckets(financeSummary.expenses)
-                    : "Awaiting live data"
-                }
-                tone="negative"
-              />
-              <FinanceValue
-                label="Operating position"
-                value={
-                  financeSummary.recognizedRevenueRecords ||
-                  financeSummary.expenseRecords
-                    ? formatMoneyBuckets(financeSummary.netPosition)
-                    : "Awaiting live data"
-                }
-                tone="negative"
-              />
-            </div>
-          </RecordState>
+            {finance.isPending ? (
+              <div className="mt-5">
+                <LoadingState message="Loading live finance…" />
+              </div>
+            ) : finance.isError ? (
+              <div className="mt-5">
+                <ErrorState message="Financial records could not be loaded." onRetry={() => finance.refetch()} />
+              </div>
+            ) : !financeSummary.recognizedRevenueRecords && !financeSummary.expenseRecords ? (
+              <div className="mt-5">
+                <EmptyState>No finance yet.</EmptyState>
+              </div>
+            ) : (
+              <div className="mt-5 grid gap-3 sm:grid-cols-3">
+                <FinanceValue
+                  label="Recorded revenue"
+                  value={
+                    financeSummary.recognizedRevenueRecords
+                      ? formatMoneyBuckets(financeSummary.revenue)
+                      : "Awaiting live data"
+                  }
+                />
+                <FinanceValue
+                  label="Company expenses"
+                  value={
+                    financeSummary.expenseRecords
+                      ? formatMoneyBuckets(financeSummary.expenses)
+                      : "Awaiting live data"
+                  }
+                  tone="negative"
+                />
+                <FinanceValue
+                  label="Operating position"
+                  value={
+                    financeSummary.recognizedRevenueRecords ||
+                    financeSummary.expenseRecords
+                      ? formatMoneyBuckets(financeSummary.netPosition)
+                      : "Awaiting live data"
+                  }
+                  tone="negative"
+                />
+              </div>
+            )}
         </section>
 
         <section className="mt-5 rounded-2xl border border-[#c9d7ec] bg-[#f7faff] p-5 shadow-[0_5px_20px_rgba(21,36,58,0.035)] sm:p-6">
@@ -967,11 +1102,25 @@ export default function Index() {
             </div>
             <span className="text-[10px] font-semibold text-slate-400">Organisation-scoped · RLS enforced</span>
           </div>
-          <div className="mt-5 grid gap-3 lg:grid-cols-3">
-            {executiveAreas.map((area) => (
-              <ExecutiveAreaCard key={area.title} area={area} />
-            ))}
-          </div>
+          {technologyDashboard.isPending ? (
+            <div className="mt-5">
+              <LoadingState message="Loading live technology…" />
+            </div>
+          ) : technologyError ? (
+            <div className="mt-5">
+              <ErrorState message="Technology integration data could not be loaded." onRetry={() => technologyDashboard.refetch()} />
+            </div>
+          ) : !technologyHasData || (!productMetrics.some(m => m.value > 0) && !engineeringMetrics.some(m => m.value > 0) && !securityMetrics.some(m => m.value > 0)) ? (
+            <div className="mt-5">
+              <EmptyState>No technology yet.</EmptyState>
+            </div>
+          ) : (
+            <div className="mt-5 grid gap-3 lg:grid-cols-3">
+              {executiveAreas.map((area) => (
+                <ExecutiveAreaCard key={area.title} area={area} />
+              ))}
+            </div>
+          )}
         </section>
 
         <section className="mt-5 rounded-2xl border border-slate-200/80 bg-white p-5 shadow-[0_5px_20px_rgba(21,36,58,0.035)] sm:p-6">
@@ -1000,10 +1149,12 @@ export default function Index() {
             </div>
           </div>
           {technologyDashboard.isPending ? (
-            <div className="mt-4"><LoadingState /></div>
+            <div className="mt-4"><LoadingState message="Loading live technology activity…" /></div>
           ) : technologyError ? (
-            <div className="mt-4"><ErrorState message="Unable to load executive data." /></div>
-          ) : recentActivity.length ? (
+            <div className="mt-4"><ErrorState message="Technology activity could not be loaded." onRetry={() => technologyDashboard.refetch()} /></div>
+          ) : !recentActivity.length ? (
+            <div className="mt-4"><EmptyState>No technology activity yet.</EmptyState></div>
+          ) : (
             <div className="mt-4 grid gap-2 sm:grid-cols-2">
               {recentActivity.map((activity) => (
                 <div key={activity.id} className="flex items-center justify-between gap-3 rounded-xl border border-slate-100 bg-[#f7f9fb] p-3">
@@ -1015,8 +1166,6 @@ export default function Index() {
                 </div>
               ))}
             </div>
-          ) : (
-            <div className="mt-4"><EmptyState>No recent operational activity recorded.</EmptyState></div>
           )}
         </section>
 
@@ -1027,6 +1176,10 @@ export default function Index() {
       </div>
     </AppShell>
   );
+}
+
+export default function Index() {
+  return <CeoDashboard />;
 }
 
 function FinanceValue({

@@ -137,6 +137,10 @@ export type SecurityFinding = {
   owner_employee_id: string | null;
   linked_task_id: string | null;
   linked_ticket_id: string | null;
+  status: string | null;
+  severity: string | null;
+  risk_level: string | null;
+  finding_title: string | null;
 };
 
 export type SecurityIncident = {
@@ -145,6 +149,9 @@ export type SecurityIncident = {
   owner_employee_id: string | null;
   linked_task_id: string | null;
   linked_ticket_id: string | null;
+  status: string | null;
+  severity: string | null;
+  incident_title: string | null;
 };
 
 export type SecurityRemediation = {
@@ -155,6 +162,7 @@ export type SecurityRemediation = {
   verified_by: string | null;
   linked_task_id: string | null;
   linked_ticket_id: string | null;
+  status: string | null;
 };
 
 export type EmployeeReference = {
@@ -197,6 +205,7 @@ type QueryState = {
   isPending: boolean;
   isError: boolean;
   error: Error | null;
+  refetch: () => Promise<unknown>;
 };
 
 const columns = {
@@ -214,13 +223,13 @@ const columns = {
     "id, organization_id, engineering_project_id, product_release_id, environment_id, version, commit_reference, deployment_status, deployed_by, deployment_started_at, deployment_completed_at, rollback_reason, notes, created_at, updated_at",
   controls:
     "id, organization_id, control_code, name, description, control_type, status, owner_employee_id, review_frequency, last_reviewed_at, next_review_at, evidence_reference, notes, created_at, updated_at",
-  securityTests: "id, organization_id, owner_employee_id, linked_task_id, linked_ticket_id",
+  securityTests: "id, organization_id, owner_employee_id, linked_task_id, linked_ticket_id, status, test_type, started_at, completed_at",
   findings:
-    "id, organization_id, security_test_id, owner_employee_id, linked_task_id, linked_ticket_id",
+    "id, organization_id, security_test_id, owner_employee_id, linked_task_id, linked_ticket_id, status, severity, risk_level, finding_title, title",
   incidents:
-    "id, organization_id, owner_employee_id, linked_task_id, linked_ticket_id",
+    "id, organization_id, owner_employee_id, linked_task_id, linked_ticket_id, status, severity, incident_title, title",
   remediations:
-    "id, organization_id, finding_id, owner_employee_id, verified_by, linked_task_id, linked_ticket_id",
+    "id, organization_id, finding_id, owner_employee_id, verified_by, linked_task_id, linked_ticket_id, status",
   employees: "id, first_name, last_name, job_title, employee_status",
   tasks: "id, title, status, priority, due_date",
   tickets: "id, title, status, priority, due_date",
@@ -397,6 +406,10 @@ function parseFinding(row: RawRow): SecurityFinding {
     owner_employee_id: optionalString(row, "owner_employee_id"),
     linked_task_id: optionalString(row, "linked_task_id"),
     linked_ticket_id: optionalString(row, "linked_ticket_id"),
+    status: optionalString(row, "status"),
+    severity: optionalString(row, "severity"),
+    risk_level: optionalString(row, "risk_level"),
+    finding_title: optionalString(row, "finding_title") ?? optionalString(row, "title"),
   };
 }
 
@@ -407,6 +420,9 @@ function parseIncident(row: RawRow): SecurityIncident {
     owner_employee_id: optionalString(row, "owner_employee_id"),
     linked_task_id: optionalString(row, "linked_task_id"),
     linked_ticket_id: optionalString(row, "linked_ticket_id"),
+    status: optionalString(row, "status"),
+    severity: optionalString(row, "severity"),
+    incident_title: optionalString(row, "incident_title") ?? optionalString(row, "title"),
   };
 }
 
@@ -419,6 +435,7 @@ function parseRemediation(row: RawRow): SecurityRemediation {
     verified_by: optionalString(row, "verified_by"),
     linked_task_id: optionalString(row, "linked_task_id"),
     linked_ticket_id: optionalString(row, "linked_ticket_id"),
+    status: optionalString(row, "status"),
   };
 }
 
@@ -605,6 +622,7 @@ export function useProductEngineeringDashboard(): QueryState {
         : query.error
           ? new Error("The Product, Engineering and Security data could not be loaded.")
           : null,
+    refetch: () => query.refetch().then((result) => result.data),
   };
 }
 

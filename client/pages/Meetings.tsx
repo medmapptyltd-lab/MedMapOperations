@@ -1,4 +1,5 @@
 import { FormEvent, useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import {
   CalendarDays,
   CheckCircle2,
@@ -9,94 +10,1066 @@ import {
   Save,
   Target,
   Trash2,
-  Wrench,
   X,
 } from "lucide-react";
 import { AppShell } from "@/components/medmap/AppShell";
-import { DepartmentTarget, Meeting, MeetingDeadline, TargetPeriod, TechnologyWorkItem, formatDate, useMedMap } from "@/lib/medmap-store";
+import { IfPermitted } from "@/components/medmap/IfPermitted";
+import { useOperationsDashboard } from "@/lib/operations-dashboard";
+import { useExecutiveSummary, findCurrentKpiPeriod, normaliseStatus, isResolvedStatus } from "@/lib/executive-dashboard";
+import {
+  useMeetingsMutations,
+  useDeadlinesMutations,
+  type MeetingInput,
+  type DeadlineInput,
+} from "@/lib/crud";
+import { getSupabaseClient } from "@/lib/supabase";
+import { useCurrentOrganisation } from "@/lib/supabase-identity";
 import { cn } from "@/lib/utils";
 
+type SectionState = "loading" | "empty" | "error" | "ready";
+
+function getSectionState<T>(
+  isPending: boolean,
+  isError: boolean,
+  items: readonly T[] | undefined,
+): SectionState {
+  if (isPending) return "loading";
+  if (isError) return "error";
+  if (!items || items.length === 0) return "empty";
+  return "ready";
+}
+
+type MeetingRow = {
+  id: string;
+  organization_id: string | null;
+  department_id: string | null;
+  title: string;
+  meeting_type: string;
+  meeting_date: string;
+  duration_minutes: number | null;
+  location: string | null;
+  status: string;
+  chair_employee_id: string | null;
+  created_by: string | null;
+  summary: string | null;
+  notes: string | null;
+};
+
+function parseMeetingRow(row: Record<string, unknown>): MeetingRow {
+  return {
+    id: typeof row.id === "string" ? row.id : "",
+    organization_id: typeof row.organization_id === "string" ? row.organization_id : null,
+    department_id: typeof row.department_id === "string" ? row.department_id : null,
+    title: typeof row.title === "string" ? row.title : "",
+    meeting_type: typeof row.meeting_type === "string" ? row.meeting_type : "other",
+    meeting_date: typeof row.meeting_date === "string" ? row.meeting_date : "",
+    duration_minutes: typeof row.duration_minutes === "number" ? row.duration_minutes : null,
+    location: typeof row.location === "string" ? row.location : null,
+    status: typeof row.status === "string" ? row.status : "scheduled",
+    chair_employee_id: typeof row.chair_employee_id === "string" ? row.chair_employee_id : null,
+    created_by: typeof row.created_by === "string" ? row.created_by : null,
+    summary: typeof row.summary === "string" ? row.summary : null,
+    notes: typeof row.notes === "string" ? row.notes : null,
+  };
+}
+
+function useMeetingsQuery() {
+  const organizationState = useCurrentOrganisation();
+  const organizationId = organizationState.organizationId;
+  return useQuery({
+    queryKey: ["meetings", organizationId],
+    enabled: Boolean(organizationId && !organizationState.isLoading),
+    queryFn: async () => {
+      if (!organizationId) return [];
+      const { data, error } = await getSupabaseClient()
+        .from("meetings")
+        .select(
+          "id, organization_id, department_id, title, meeting_type, meeting_date, duration_minutes, location, status, chair_employee_id, created_by, summary, notes",
+        )
+        .eq("organization_id", organizationId);
+      if (error) throw error;
+      return (Array.isArray(data) ? data : [])
+        .filter((row) => typeof row === "object" && row !== null)
+        .map((row) => parseMeetingRow(row as Record<string, unknown>));
+    },
+    staleTime: 30_000,
+  });
+}
+
+function SectionLoading({ label }: { label: string }) {
+  return (
+    <div className="p-8 text-center">
+      <div className="mx-auto grid size-10 place-items-center rounded-xl bg-slate-100">
+        <CalendarDays size={18} className="animate-pulse text-slate-400" />
+      </div>
+      <p className="mt-3 text-[11px] font-medium text-slate-400">Loading {label}…</p>
+    </div>
+  );
+}
+
+function SectionError({ label, message }: { label: string; message?: string }) {
+  return (
+    <div className="p-8 text-center">
+      <div className="mx-auto grid size-10 place-items-center rounded-xl bg-[#ffe5e3]">
+        <Target size={18} className="text-[#bd504d]" />
+      </div>
+      <p className="mt-3 text-[11px] font-bold text-[#bd504d]">Could not load {label}</p>
+      <p className="mt-1 text-[10px] text-slate-400">
+        {message ?? "Refresh the page and try again."}
+      </p>
+    </div>
+  );
+}
+
+function SectionEmpty({ label, hint }: { label: string; hint: string }) {
+  return (
+    <div className="p-8 text-center">
+      <div className="mx-auto grid size-10 place-items-center rounded-xl bg-slate-50">
+        <ClipboardCheck size={18} className="text-slate-400" />
+      </div>
+      <p className="mt-3 text-[11px] font-medium text-slate-500">No {label} yet</p>
+      <p className="mt-1 text-[10px] text-slate-400">{hint}</p>
+    </div>
+  );
+}
+
+function SummaryCard({
+  label,
+  value,
+  detail,
+  icon: Icon,
+}: {
+  label: string;
+  value: string;
+  detail: string;
+  icon: React.ElementType;
+}) {
+  return (
+    <div className="rounded-2xl border border-slate-200/80 bg-white p-4 shadow-[0_5px_20px_rgba(21,36,58,0.035)]">
+      <div className="flex items-center justify-between">
+        <p className="text-[10px] text-slate-400">{label}</p>
+        <Icon size={16} className="text-[#755bc0]" />
+      </div>
+      <p className="mt-2 font-display text-[23px] font-bold tracking-[-0.06em] text-[#152239]">
+        {value}
+      </p>
+      <p className="mt-1 text-[10px] font-semibold text-[#755bc0]">{detail}</p>
+    </div>
+  );
+}
+
+function formatDate(value: string) {
+  try {
+    return new Intl.DateTimeFormat("en-ZA", {
+      day: "2-digit",
+      month: "short",
+      year: "numeric",
+    }).format(new Date(value));
+  } catch {
+    return value;
+  }
+}
+
+function formatNumber(value: number | null | undefined) {
+  if (value === null || value === undefined || !Number.isFinite(value)) return "—";
+  return value.toLocaleString("en-ZA", { maximumFractionDigits: 2 });
+}
+
 const today = () => new Date().toISOString().slice(0, 10);
-const emptyMeeting: Omit<Meeting, "id"> = { title: "", date: today(), time: "09:00", status: "Planned", attendees: "", notes: "", decisions: "", createdAt: today(), source: "manual" };
-const emptyDeadline: Omit<MeetingDeadline, "id"> = { meetingId: "", title: "", dueDate: today(), owner: "", status: "Open", followUp: "" };
-const targetMetrics = ["Active doctors", "Active ambassadors", "Active patients"];
+
+const emptyMeeting: MeetingInput = {
+  title: "",
+  meetingType: "operations",
+  meetingDate: today(),
+  durationMinutes: 60,
+  location: "",
+  status: "scheduled",
+  summary: "",
+  notes: "",
+};
 
 export default function Meetings() {
-  const { meetings, meetingDeadlines, employees, departmentTargets, technologyWorkItems, cooWorkItems, addMeeting, updateMeeting, deleteMeeting, addMeetingDeadline, updateMeetingDeadline, deleteMeetingDeadline, addDepartmentTarget, updateDepartmentTarget, deleteDepartmentTarget, updateTechnologyWorkItem, updateCOOWorkItem } = useMedMap();
-  const [meetingForm, setMeetingForm] = useState(emptyMeeting);
-  const [editingMeetingId, setEditingMeetingId] = useState<string | null>(null);
-  const [deadlineForm, setDeadlineForm] = useState({ ...emptyDeadline, meetingId: meetings[0]?.id ?? "", owner: employees[0]?.name ?? "" });
-  const [targetPeriod, setTargetPeriod] = useState<TargetPeriod>("Monthly");
-  const [targetForm, setTargetForm] = useState({ department: "Commercial", metric: "Active doctors", owner: employees[3]?.name ?? "", target: 0, notes: "" });
+  const meetingsQuery = useMeetingsQuery();
+  const operationsQuery = useOperationsDashboard();
+  const { kpis: kpisQuery } = useExecutiveSummary();
+  const { createMeeting, updateMeeting, deleteMeeting } = useMeetingsMutations();
+  const { createDeadline, updateDeadline, deleteDeadline } = useDeadlinesMutations();
 
-  const openDeadlines = useMemo(() => meetingDeadlines.filter((deadline) => deadline.status !== "Done").sort((a, b) => a.dueDate.localeCompare(b.dueDate)), [meetingDeadlines]);
-  const visibleTargets = departmentTargets.filter((target) => target.period === targetPeriod);
-  const companyRollup = useMemo(() => targetMetrics.map((metric) => {
-    const rows = visibleTargets.filter((target) => target.metric === metric);
-    return { metric, actual: rows.reduce((sum, row) => sum + row.actual, 0), target: rows.reduce((sum, row) => sum + row.target, 0), departments: rows.map((row) => row.department).join(" + ") || "No department target" };
-  }), [visibleTargets]);
-  const outstandingTechnology = technologyWorkItems.filter((item) => item.status !== "Done");
-  const outstandingCOO = cooWorkItems.filter((item) => item.status !== "Done");
-  const meetingName = (id: string) => meetings.find((meeting) => meeting.id === id)?.title ?? "Unlinked meeting";
+  const meetings = meetingsQuery.data ?? [];
+  const deadlines = operationsQuery.data?.deadlines ?? [];
+  const employees = operationsQuery.data?.employees ?? [];
+  const departments = operationsQuery.data?.departments ?? [];
+
+  const kpis = kpisQuery.data?.kpis ?? [];
+  const kpiPeriods = kpisQuery.data?.periods ?? [];
+  const kpiTargets = kpisQuery.data?.targets ?? [];
+  const kpiResults = kpisQuery.data?.results ?? [];
+
+  const currentKpiPeriod = useMemo(
+    () => findCurrentKpiPeriod(kpiPeriods),
+    [kpiPeriods],
+  );
+
+  const openDeadlines = useMemo(
+    () =>
+      deadlines
+        .filter((deadline) => !isResolvedStatus(deadline.status))
+        .sort((a, b) => a.due_at.localeCompare(b.due_at)),
+    [deadlines],
+  );
+
+  const departmentTargetRows = useMemo(() => {
+    if (!currentKpiPeriod) return [];
+    const employeeName = (id: string | null) => {
+      if (!id) return "Unassigned";
+      const employee = employees.find((candidate) => candidate.id === id);
+      return employee
+        ? `${employee.first_name} ${employee.last_name}`.trim()
+        : "Unassigned";
+    };
+    const departmentName = (id: string | null) => {
+      if (!id) return "Unassigned";
+      return departments.find((candidate) => candidate.id === id)?.name ?? "Unassigned";
+    };
+    return kpis
+      .filter((kpi) => kpi.active)
+      .map((kpi) => {
+        const target = kpiTargets.find(
+          (candidate) =>
+            candidate.kpi_id === kpi.id && candidate.period_id === currentKpiPeriod.id,
+        );
+        const result = kpiResults.find(
+          (candidate) =>
+            candidate.period_id === currentKpiPeriod.id &&
+            (candidate.target_id === target?.id ||
+              (!target && candidate.kpi_id === kpi.id)),
+        );
+        const achievement =
+          target?.target_value && target.target_value > 0 && result?.actual_value !== null
+            ? ((result?.actual_value ?? 0) / target.target_value) * 100
+            : null;
+        const status = (() => {
+          if (achievement === null || !Number.isFinite(achievement)) return "Not set";
+          if (achievement >= 100) return "On track";
+          if (achievement >= 80) return "At risk";
+          return "Outstanding";
+        })();
+        return {
+          id: `${kpi.id}-${currentKpiPeriod.id}`,
+          kpiId: kpi.id,
+          kpiName: kpi.name,
+          department: departmentName(kpi.department_id),
+          owner: employeeName(kpi.owner_employee_id),
+          target: target?.target_value ?? null,
+          actual: result?.actual_value ?? null,
+          achievement,
+          status,
+          unit: kpi.unit,
+          periodName: currentKpiPeriod.period_name,
+        };
+      });
+  }, [kpis, currentKpiPeriod, kpiTargets, kpiResults, employees, departments]);
+
+  const meetingsState = getSectionState(
+    meetingsQuery.isPending,
+    meetingsQuery.isError,
+    meetings,
+  );
+  const deadlinesState = getSectionState(
+    operationsQuery.isPending,
+    operationsQuery.isError,
+    deadlines,
+  );
+  const targetsState = getSectionState(
+    kpisQuery.isPending,
+    kpisQuery.isError,
+    departmentTargetRows,
+  );
+
+  const [meetingForm, setMeetingForm] = useState<MeetingInput>(emptyMeeting);
+  const [editingMeetingId, setEditingMeetingId] = useState<string | null>(null);
+  const [deadlineForm, setDeadlineForm] = useState<DeadlineInput>({
+    title: "",
+    dueAt: today(),
+    description: "",
+    priority: "medium",
+    status: "open",
+    ownerEmployeeId: employees[0]?.id ?? null,
+    departmentId: departments[0]?.id ?? null,
+  });
 
   const submitMeeting = (event: FormEvent) => {
     event.preventDefault();
-    if (!meetingForm.title.trim() || !meetingForm.notes.trim()) return;
-    if (editingMeetingId) updateMeeting(editingMeetingId, meetingForm);
-    else addMeeting(meetingForm);
-    setMeetingForm({ ...emptyMeeting, date: meetingForm.date });
+    if (!meetingForm.title.trim()) return;
+    if (editingMeetingId) {
+      void updateMeeting.mutateAsync({ id: editingMeetingId, patch: meetingForm });
+    } else {
+      void createMeeting.mutateAsync(meetingForm);
+    }
+    setMeetingForm({ ...emptyMeeting, meetingDate: meetingForm.meetingDate });
     setEditingMeetingId(null);
   };
 
-  const startEditingMeeting = (meeting: Meeting) => {
+  const startEditingMeeting = (meeting: MeetingRow) => {
     setEditingMeetingId(meeting.id);
-    setMeetingForm({ title: meeting.title, date: meeting.date, time: meeting.time, status: meeting.status, attendees: meeting.attendees, notes: meeting.notes, decisions: meeting.decisions, createdAt: meeting.createdAt, source: meeting.source });
+    setMeetingForm({
+      title: meeting.title,
+      meetingType: (meeting.meeting_type as MeetingInput["meetingType"]) ?? "other",
+      meetingDate: meeting.meeting_date,
+      durationMinutes: meeting.duration_minutes ?? undefined,
+      location: meeting.location ?? undefined,
+      status: (meeting.status as MeetingInput["status"]) ?? "scheduled",
+      summary: meeting.summary ?? undefined,
+      notes: meeting.notes ?? undefined,
+    });
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
   const submitDeadline = (event: FormEvent) => {
     event.preventDefault();
-    if (!deadlineForm.meetingId || !deadlineForm.title.trim() || !deadlineForm.owner.trim()) return;
-    addMeetingDeadline(deadlineForm);
-    setDeadlineForm((current) => ({ ...current, title: "", followUp: "" }));
+    if (!deadlineForm.title.trim()) return;
+    void createDeadline.mutateAsync(deadlineForm);
+    setDeadlineForm((current) => ({
+      ...current,
+      title: "",
+      description: "",
+    }));
   };
 
-  const submitTarget = (event: FormEvent) => {
-    event.preventDefault();
-    if (!targetForm.department.trim() || !targetForm.metric.trim() || !targetForm.owner.trim()) return;
-    addDepartmentTarget({ ...targetForm, period: targetPeriod, actual: 0, unit: "count", status: targetForm.target > 0 ? "At risk" : "Not set" });
-    setTargetForm((current) => ({ ...current, target: 0, notes: "" }));
-  };
+  return (
+    <AppShell>
+      <div className="mx-auto max-w-[1440px] px-5 pb-12 pt-8 sm:px-8 xl:px-10">
+        <div className="flex flex-col justify-between gap-5 md:flex-row md:items-end">
+          <div>
+            <div className="mb-3 flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.17em] text-[#755bc0]">
+              <CalendarDays size={13} /> Meetings & accountability
+            </div>
+            <h1 className="font-display text-[32px] font-bold tracking-[-0.06em] text-[#152239] sm:text-[39px]">
+              Turn meetings into owned outcomes.
+            </h1>
+            <p className="mt-2 max-w-[720px] text-[13px] leading-6 text-slate-500">
+              Record the conversation, track department KPI targets from the live period, and keep
+              every resulting deadline visible until it has an accountable owner.
+            </p>
+          </div>
+          <IfPermitted
+            roleKinds={["ceo", "coo", "cto", "executive_other", "department_head", "manager"]}
+          >
+            <a
+              href="#record"
+              className="inline-flex items-center gap-2 self-start rounded-xl bg-[#182842] px-3.5 py-2.5 text-[11px] font-bold text-white shadow-[0_5px_12px_rgba(20,35,58,.15)] hover:bg-[#233958] md:self-auto"
+            >
+              <Plus size={15} /> Record a meeting
+            </a>
+          </IfPermitted>
+        </div>
 
-  return <AppShell><div className="mx-auto max-w-[1440px] px-5 pb-12 pt-8 sm:px-8 xl:px-10">
-    <div className="flex flex-col justify-between gap-5 md:flex-row md:items-end"><div><div className="mb-3 flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.17em] text-[#755bc0]"><CalendarDays size={13} /> Meetings & accountability</div><h1 className="font-display text-[32px] font-bold tracking-[-0.06em] text-[#152239] sm:text-[39px]">Turn meetings into owned outcomes.</h1><p className="mt-2 max-w-[720px] text-[13px] leading-6 text-slate-500">Record the conversation, set department targets from the real zero baseline, and keep every resulting deadline visible until it has an accountable owner.</p></div><a href="#record" className="inline-flex items-center gap-2 self-start rounded-xl bg-[#182842] px-3.5 py-2.5 text-[11px] font-bold text-white shadow-[0_5px_12px_rgba(20,35,58,.15)] hover:bg-[#233958] md:self-auto"><Plus size={15} /> Record a meeting</a></div>
+        <section className="mt-7 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <SummaryCard
+            label="Meeting records"
+            value={String(meetings.length)}
+            detail={operationsQuery.isPending ? "…" : "From Supabase meetings table"}
+            icon={FileText}
+          />
+          <SummaryCard
+            label="Open deadlines"
+            value={String(openDeadlines.length)}
+            detail="Need an owner or follow-up"
+            icon={ClipboardCheck}
+          />
+          <SummaryCard
+            label="Active KPI targets"
+            value={String(departmentTargetRows.filter((row) => row.target !== null).length)}
+            detail={currentKpiPeriod?.period_name ?? "No active period"}
+            icon={Target}
+          />
+          <SummaryCard
+            label="Team members"
+            value={String(employees.filter((e) => normaliseStatus(e.employee_status) === "active").length)}
+            detail="Active employees"
+            icon={CheckCircle2}
+          />
+        </section>
 
-    <section className="mt-7 grid gap-3 sm:grid-cols-2 xl:grid-cols-4"><SummaryCard label="Meeting records" value={String(meetings.length)} detail="Typed manually" icon={FileText} /><SummaryCard label="Open deadlines" value={String(openDeadlines.length)} detail="Need an owner or follow-up" icon={ClipboardCheck} /><SummaryCard label="COO tickets" value={String(outstandingCOO.length)} detail="Open delivery work" icon={ClipboardCheck} /><SummaryCard label="Technology outstanding" value={String(outstandingTechnology.length)} detail="CTO work items" icon={Wrench} /></section>
+        <section className="mt-5 rounded-2xl border border-[#ddd6f5] bg-[#fbfaff] p-5 shadow-[0_5px_20px_rgba(21,36,58,0.035)] sm:p-6">
+          <div className="flex flex-col justify-between gap-4 lg:flex-row lg:items-center">
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="grid size-8 place-items-center rounded-lg bg-[#eee8ff] text-[#755bc0]">
+                  <Target size={16} />
+                </span>
+                <h2 className="font-display text-[16px] font-bold text-[#152239]">
+                  Department targets
+                </h2>
+              </div>
+              <p className="mt-2 text-[11px] text-slate-500">
+                {currentKpiPeriod
+                  ? `Live period: ${currentKpiPeriod.period_name}. Achievement is actual ÷ target × 100.`
+                  : "No active KPI period configured."}
+              </p>
+            </div>
+            <span className="rounded-full bg-[#f1edff] px-2.5 py-1 text-[10px] font-bold text-[#755bc0]">
+              {departmentTargetRows.length} KPI{departmentTargetRows.length === 1 ? "" : "s"}
+            </span>
+          </div>
+          {targetsState === "loading" && <SectionLoading label="department targets" />}
+          {targetsState === "error" && (
+            <SectionError label="department targets" message={kpisQuery.error?.message} />
+          )}
+          {targetsState === "empty" && (
+            <SectionEmpty
+              label="department targets"
+              hint="Seed the kpis and kpi_targets tables to surface the company target roll-up here."
+            />
+          )}
+          {targetsState === "ready" && (
+            <>
+              <div className="mt-5 grid gap-3 sm:grid-cols-3">
+                {kpis.slice(0, 3).map((kpi) => {
+                  const row = departmentTargetRows.find((candidate) => candidate.kpiId === kpi.id);
+                  return (
+                    <div
+                      key={kpi.id}
+                      className="rounded-xl border border-[#e2ddf7] bg-white p-4"
+                    >
+                      <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-slate-400">
+                        {row?.periodName ?? "Current period"}
+                      </p>
+                      <p className="mt-2 text-[12px] font-bold text-slate-700">{kpi.name}</p>
+                      <div className="mt-3 flex items-end justify-between gap-3">
+                        <div>
+                          <p className="font-display text-[23px] font-bold text-[#152239]">
+                            {formatNumber(row?.actual)}
+                          </p>
+                          <p className="text-[10px] text-slate-400">
+                            actual {row?.unit ?? ""}
+                          </p>
+                        </div>
+                        <div className="text-right">
+                          <p className="font-display text-[23px] font-bold text-[#755bc0]">
+                            {formatNumber(row?.target)}
+                          </p>
+                          <p className="text-[10px] text-slate-400">target</p>
+                        </div>
+                      </div>
+                      <p className="mt-3 text-[10px] text-slate-400">
+                        {row?.department} · {row?.owner}
+                      </p>
+                    </div>
+                  );
+                })}
+              </div>
+              <div className="mt-5 overflow-x-auto">
+                <table className="w-full min-w-[780px] text-left">
+                  <thead>
+                    <tr className="border-b border-[#e2ddf7] text-[10px] uppercase tracking-[0.12em] text-slate-400">
+                      <th className="px-3 py-3 font-bold">Department</th>
+                      <th className="px-3 py-3 font-bold">KPI</th>
+                      <th className="px-3 py-3 font-bold">Target</th>
+                      <th className="px-3 py-3 font-bold">Actual</th>
+                      <th className="px-3 py-3 font-bold">Achievement</th>
+                      <th className="px-3 py-3 font-bold">Owner</th>
+                      <th className="px-3 py-3 font-bold">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {departmentTargetRows.map((row) => (
+                      <tr
+                        key={row.id}
+                        className="border-b border-[#eeeaf9] text-[11px] last:border-0"
+                      >
+                        <td className="px-3 py-3 font-semibold text-slate-600">
+                          {row.department}
+                        </td>
+                        <td className="px-3 py-3 text-slate-500">{row.kpiName}</td>
+                        <td className="px-3 py-3 font-display font-bold text-[#755bc0]">
+                          {formatNumber(row.target)}
+                        </td>
+                        <td className="px-3 py-3 font-display font-bold text-[#152239]">
+                          {formatNumber(row.actual)}
+                        </td>
+                        <td className="px-3 py-3">
+                          <span
+                            className={cn(
+                              "rounded-full px-2 py-1 text-[9px] font-bold",
+                              row.achievement === null &&
+                                "bg-slate-100 text-slate-500",
+                              row.achievement !== null &&
+                                row.achievement >= 100 &&
+                                "bg-[#e8f8f2] text-[#168465]",
+                              row.achievement !== null &&
+                                row.achievement >= 80 &&
+                                row.achievement < 100 &&
+                                "bg-[#fff2d9] text-[#9a6419]",
+                              row.achievement !== null &&
+                                row.achievement < 80 &&
+                                "bg-[#ffe5e3] text-[#bd504d]",
+                            )}
+                          >
+                            {row.achievement === null
+                              ? "—"
+                              : `${row.achievement.toFixed(1)}%`}
+                          </span>
+                        </td>
+                        <td className="px-3 py-3 text-slate-500">{row.owner}</td>
+                        <td className="px-3 py-3">
+                          <span
+                            className={cn(
+                              "rounded-full px-2 py-1 text-[9px] font-bold",
+                              row.status === "On track" &&
+                                "bg-[#e8f8f2] text-[#168465]",
+                              row.status === "At risk" &&
+                                "bg-[#fff2d9] text-[#9a6419]",
+                              row.status === "Outstanding" &&
+                                "bg-[#ffe5e3] text-[#bd504d]",
+                              row.status === "Not set" &&
+                                "bg-slate-100 text-slate-500",
+                            )}
+                          >
+                            {row.status}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
+        </section>
 
-    <section className="mt-5 rounded-2xl border border-[#ddd6f5] bg-[#fbfaff] p-5 shadow-[0_5px_20px_rgba(21,36,58,0.035)] sm:p-6"><div className="flex flex-col justify-between gap-4 lg:flex-row lg:items-center"><div><div className="flex items-center gap-2"><span className="grid size-8 place-items-center rounded-lg bg-[#eee8ff] text-[#755bc0]"><Target size={16} /></span><h2 className="font-display text-[16px] font-bold text-[#152239]">Department targets</h2></div><p className="mt-2 text-[11px] text-slate-500">Every target starts from the actual baseline: 0 doctors, 0 ambassadors and 0 patients.</p></div><div className="flex gap-1 rounded-lg border border-[#e2ddf7] bg-white p-1"><button type="button" onClick={() => setTargetPeriod("Weekly")} className={cn("rounded-md px-3 py-1.5 text-[10px] font-bold", targetPeriod === "Weekly" ? "bg-[#eee8ff] text-[#755bc0]" : "text-slate-400")}>Weekly</button><button type="button" onClick={() => setTargetPeriod("Monthly")} className={cn("rounded-md px-3 py-1.5 text-[10px] font-bold", targetPeriod === "Monthly" ? "bg-[#eee8ff] text-[#755bc0]" : "text-slate-400")}>Monthly</button></div></div><div className="mt-5 grid gap-3 sm:grid-cols-3">{companyRollup.map((rollup) => <div key={rollup.metric} className="rounded-xl border border-[#e2ddf7] bg-white p-4"><p className="text-[10px] font-bold uppercase tracking-[0.12em] text-slate-400">Company overall</p><p className="mt-2 text-[12px] font-bold text-slate-700">{rollup.metric}</p><div className="mt-3 flex items-end justify-between gap-3"><div><p className="font-display text-[23px] font-bold text-[#152239]">{rollup.actual.toLocaleString("en-ZA")}</p><p className="text-[10px] text-slate-400">actual</p></div><div className="text-right"><p className="font-display text-[23px] font-bold text-[#755bc0]">{rollup.target.toLocaleString("en-ZA")}</p><p className="text-[10px] text-slate-400">target</p></div></div><p className="mt-3 text-[10px] text-slate-400">{rollup.departments}</p></div>)}</div><div className="mt-5 overflow-x-auto"><table className="w-full min-w-[780px] text-left"><thead><tr className="border-b border-[#e2ddf7] text-[10px] uppercase tracking-[0.12em] text-slate-400"><th className="px-3 py-3 font-bold">Department</th><th className="px-3 py-3 font-bold">Metric</th><th className="px-3 py-3 font-bold">Actual</th><th className="px-3 py-3 font-bold">Target</th><th className="px-3 py-3 font-bold">Owner</th><th className="px-3 py-3 font-bold">Status</th><th className="px-3 py-3 font-bold">Action</th></tr></thead><tbody>{visibleTargets.map((target) => <TargetRow key={target.id} target={target} onUpdate={updateDepartmentTarget} onDelete={() => deleteDepartmentTarget(target.id)} />)}</tbody></table>{!visibleTargets.length && <p className="p-6 text-center text-[11px] text-slate-400">No {targetPeriod.toLowerCase()} targets yet.</p>}</div><form onSubmit={submitTarget} className="mt-5 grid gap-3 rounded-xl border border-dashed border-[#cfc6ef] bg-white p-4 sm:grid-cols-2 lg:grid-cols-6"><label className="text-[10px] font-bold text-slate-500">Department<input required value={targetForm.department} onChange={(e) => setTargetForm((current) => ({ ...current, department: e.target.value }))} className="form-input" /></label><label className="text-[10px] font-bold text-slate-500">Metric<select value={targetForm.metric} onChange={(e) => setTargetForm((current) => ({ ...current, metric: e.target.value }))} className="form-input">{targetMetrics.map((metric) => <option key={metric}>{metric}</option>)}</select></label><label className="text-[10px] font-bold text-slate-500">Target for {targetPeriod.toLowerCase()}<input required type="number" min="0" value={targetForm.target} onChange={(e) => setTargetForm((current) => ({ ...current, target: Number(e.target.value) }))} className="form-input" /></label><label className="text-[10px] font-bold text-slate-500">Owner<input required value={targetForm.owner} onChange={(e) => setTargetForm((current) => ({ ...current, owner: e.target.value }))} className="form-input" /></label><label className="text-[10px] font-bold text-slate-500 lg:col-span-2">Notes<input value={targetForm.notes} onChange={(e) => setTargetForm((current) => ({ ...current, notes: e.target.value }))} className="form-input" placeholder="What does success mean?" /></label><button className="inline-flex items-center justify-center gap-2 rounded-xl bg-[#755bc0] px-3.5 py-2.5 text-[11px] font-bold text-white hover:bg-[#604ba7] lg:col-span-6"><Plus size={14} /> Add {targetPeriod.toLowerCase()} department target</button></form></section>
+        <section
+          id="record"
+          className="mt-5 grid gap-5 xl:grid-cols-[minmax(0,1.1fr)_minmax(310px,.9fr)]"
+        >
+          <form
+            onSubmit={submitMeeting}
+            className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-[0_5px_20px_rgba(21,36,58,0.035)] sm:p-6"
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="grid size-8 place-items-center rounded-lg bg-[#eaf3ff] text-[#4a87c9]">
+                    <CalendarDays size={16} />
+                  </span>
+                  <h2 className="font-display text-[16px] font-bold text-[#152239]">
+                    {editingMeetingId ? "Edit meeting record" : "Record a meeting"}
+                  </h2>
+                </div>
+                <p className="mt-2 text-[11px] text-slate-400">
+                  Capture the conversation while it is fresh. Decisions can be converted into
+                  deadlines alongside.
+                </p>
+              </div>
+              {editingMeetingId && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEditingMeetingId(null);
+                    setMeetingForm(emptyMeeting);
+                  }}
+                  className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-50"
+                  aria-label="Cancel editing"
+                >
+                  <X size={16} />
+                </button>
+              )}
+            </div>
+            <div className="mt-5 grid gap-3 sm:grid-cols-2">
+              <label className="text-[10px] font-bold text-slate-500 sm:col-span-2">
+                Meeting title
+                <input
+                  required
+                  value={meetingForm.title}
+                  onChange={(e) =>
+                    setMeetingForm((current) => ({
+                      ...current,
+                      title: e.target.value,
+                    }))
+                  }
+                  className="form-input"
+                  placeholder="e.g. Weekly operating review"
+                />
+              </label>
+              <label className="text-[10px] font-bold text-slate-500">
+                Date
+                <input
+                  required
+                  type="date"
+                  value={meetingForm.meetingDate}
+                  onChange={(e) =>
+                    setMeetingForm((current) => ({
+                      ...current,
+                      meetingDate: e.target.value,
+                    }))
+                  }
+                  className="form-input"
+                />
+              </label>
+              <label className="text-[10px] font-bold text-slate-500">
+                Duration (min)
+                <input
+                  type="number"
+                  min="0"
+                  value={meetingForm.durationMinutes ?? ""}
+                  onChange={(e) =>
+                    setMeetingForm((current) => ({
+                      ...current,
+                      durationMinutes: e.target.value
+                        ? Number(e.target.value)
+                        : undefined,
+                    }))
+                  }
+                  className="form-input"
+                />
+              </label>
+              <label className="text-[10px] font-bold text-slate-500">
+                Type
+                <select
+                  value={meetingForm.meetingType}
+                  onChange={(e) =>
+                    setMeetingForm((current) => ({
+                      ...current,
+                      meetingType: e.target.value as MeetingInput["meetingType"],
+                    }))
+                  }
+                  className="form-input"
+                >
+                  <option value="executive">Executive</option>
+                  <option value="department">Department</option>
+                  <option value="one_on_one">1:1</option>
+                  <option value="project">Project</option>
+                  <option value="operations">Operations</option>
+                  <option value="customer_ops">Customer ops</option>
+                  <option value="technical">Technical</option>
+                  <option value="other">Other</option>
+                </select>
+              </label>
+              <label className="text-[10px] font-bold text-slate-500">
+                Location
+                <input
+                  value={meetingForm.location ?? ""}
+                  onChange={(e) =>
+                    setMeetingForm((current) => ({
+                      ...current,
+                      location: e.target.value,
+                    }))
+                  }
+                  className="form-input"
+                  placeholder="Zoom, Boardroom…"
+                />
+              </label>
+              <label className="text-[10px] font-bold text-slate-500 sm:col-span-2">
+                Record / notes
+                <textarea
+                  value={meetingForm.notes ?? ""}
+                  onChange={(e) =>
+                    setMeetingForm((current) => ({
+                      ...current,
+                      notes: e.target.value,
+                    }))
+                  }
+                  className="form-input min-h-28 resize-y"
+                  placeholder="What was discussed?"
+                />
+              </label>
+              <label className="text-[10px] font-bold text-slate-500 sm:col-span-2">
+                Decisions and summary
+                <textarea
+                  value={meetingForm.summary ?? ""}
+                  onChange={(e) =>
+                    setMeetingForm((current) => ({
+                      ...current,
+                      summary: e.target.value,
+                    }))
+                  }
+                  className="form-input min-h-20 resize-y"
+                  placeholder="What was agreed?"
+                />
+              </label>
+              <label className="text-[10px] font-bold text-slate-500">
+                Record status
+                <select
+                  value={meetingForm.status}
+                  onChange={(e) =>
+                    setMeetingForm((current) => ({
+                      ...current,
+                      status: e.target.value as MeetingInput["status"],
+                    }))
+                  }
+                  className="form-input"
+                >
+                  <option value="scheduled">Planned</option>
+                  <option value="in_progress">In progress</option>
+                  <option value="completed">Held</option>
+                  <option value="cancelled">Cancelled</option>
+                </select>
+              </label>
+              <div className="flex items-end">
+                <IfPermitted
+                  roleKinds={["ceo", "coo", "cto", "executive_other", "department_head", "manager"]}
+                >
+                  <button className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-[#4a87c9] px-3.5 py-2.5 text-[11px] font-bold text-white hover:bg-[#376fa9]">
+                    <Save size={14} /> {editingMeetingId ? "Update record" : "Save meeting"}
+                  </button>
+                </IfPermitted>
+              </div>
+            </div>
+          </form>
 
-    <section className="mt-5 rounded-2xl border border-[#ddd6f5] bg-[#fbfaff] p-5 shadow-[0_5px_20px_rgba(21,36,58,0.035)] sm:p-6"><div className="flex flex-col justify-between gap-4 md:flex-row md:items-center"><div><div className="flex items-center gap-2"><span className="grid size-8 place-items-center rounded-lg bg-[#eee8ff] text-[#755bc0]"><ClipboardCheck size={16} /></span><h2 className="font-display text-[16px] font-bold text-[#152239]">COO delivery tickets</h2></div><p className="mt-2 text-[11px] text-slate-500">Kuhlula’s operating deliverables use the same ticket format as the CTO queue.</p></div><span className="rounded-full bg-[#f1edff] px-2.5 py-1 text-[10px] font-bold text-[#755bc0]">{outstandingCOO.length} outstanding</span></div><div className="mt-4 grid gap-3 md:grid-cols-2">{cooWorkItems.map((item) => <TechnologyRow key={item.id} item={item} onUpdate={updateCOOWorkItem} />)}</div></section>
+          <form
+            onSubmit={submitDeadline}
+            className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-[0_5px_20px_rgba(21,36,58,0.035)] sm:p-6"
+          >
+            <div className="flex items-center gap-2">
+              <span className="grid size-8 place-items-center rounded-lg bg-[#fff2d9] text-[#b3781f]">
+                <ClipboardCheck size={16} />
+              </span>
+              <h2 className="font-display text-[16px] font-bold text-[#152239]">
+                Add a deadline
+              </h2>
+            </div>
+            <p className="mt-2 text-[11px] text-slate-400">
+              Make the owner, date and follow-up explicit.
+            </p>
+            <div className="mt-5 space-y-3">
+              <label className="block text-[10px] font-bold text-slate-500">
+                Deadline
+                <input
+                  required
+                  value={deadlineForm.title}
+                  onChange={(e) =>
+                    setDeadlineForm((current) => ({
+                      ...current,
+                      title: e.target.value,
+                    }))
+                  }
+                  className="form-input"
+                  placeholder="What must happen?"
+                />
+              </label>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <label className="block text-[10px] font-bold text-slate-500">
+                  Due date
+                  <input
+                    required
+                    type="date"
+                    value={deadlineForm.dueAt}
+                    onChange={(e) =>
+                      setDeadlineForm((current) => ({
+                        ...current,
+                        dueAt: e.target.value,
+                      }))
+                    }
+                    className="form-input"
+                  />
+                </label>
+                <label className="block text-[10px] font-bold text-slate-500">
+                  Priority
+                  <select
+                    value={deadlineForm.priority}
+                    onChange={(e) =>
+                      setDeadlineForm((current) => ({
+                        ...current,
+                        priority: e.target.value as DeadlineInput["priority"],
+                      }))
+                    }
+                    className="form-input"
+                  >
+                    <option value="low">Low</option>
+                    <option value="medium">Medium</option>
+                    <option value="high">High</option>
+                    <option value="critical">Critical</option>
+                  </select>
+                </label>
+              </div>
+              <label className="block text-[10px] font-bold text-slate-500">
+                Owner
+                <select
+                  value={deadlineForm.ownerEmployeeId ?? ""}
+                  onChange={(e) =>
+                    setDeadlineForm((current) => ({
+                      ...current,
+                      ownerEmployeeId: e.target.value || null,
+                    }))
+                  }
+                  className="form-input"
+                >
+                  <option value="">Unassigned</option>
+                  {employees.map((employee) => (
+                    <option key={employee.id} value={employee.id}>
+                      {employee.first_name} {employee.last_name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="block text-[10px] font-bold text-slate-500">
+                Department
+                <select
+                  value={deadlineForm.departmentId ?? ""}
+                  onChange={(e) =>
+                    setDeadlineForm((current) => ({
+                      ...current,
+                      departmentId: e.target.value || null,
+                    }))
+                  }
+                  className="form-input"
+                >
+                  <option value="">No department</option>
+                  {departments.map((department) => (
+                    <option key={department.id} value={department.id}>
+                      {department.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="block text-[10px] font-bold text-slate-500">
+                Follow-up details
+                <textarea
+                  value={deadlineForm.description ?? ""}
+                  onChange={(e) =>
+                    setDeadlineForm((current) => ({
+                      ...current,
+                      description: e.target.value,
+                    }))
+                  }
+                  className="form-input min-h-24 resize-y"
+                  placeholder="Evidence, next check-in or dependency"
+                />
+              </label>
+              <IfPermitted
+                roleKinds={["ceo", "coo", "cto", "executive_other", "department_head", "manager"]}
+              >
+                <button
+                  type="submit"
+                  className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-[#b3781f] px-3.5 py-2.5 text-[11px] font-bold text-white hover:bg-[#925f13]"
+                >
+                  <Plus size={14} /> Add deadline
+                </button>
+              </IfPermitted>
+            </div>
+          </form>
+        </section>
 
-    <section className="mt-5 rounded-2xl border border-[#f0cdca] bg-[#fff8f7] p-5 shadow-[0_5px_20px_rgba(21,36,58,0.035)] sm:p-6"><div className="flex flex-col justify-between gap-4 md:flex-row md:items-center"><div><div className="flex items-center gap-2"><span className="grid size-8 place-items-center rounded-lg bg-[#ffe5e3] text-[#bd504d]"><Wrench size={16} /></span><h2 className="font-display text-[16px] font-bold text-[#152239]">Technology targets & outstanding work</h2></div><p className="mt-2 text-[11px] text-slate-500">The CTO queue starts with the issues currently preventing the company from delivering.</p></div><span className="rounded-full bg-[#ffe5e3] px-2.5 py-1 text-[10px] font-bold text-[#bd504d]">{outstandingTechnology.length} outstanding</span></div><div className="mt-4 grid gap-3 md:grid-cols-2">{technologyWorkItems.map((item) => <TechnologyRow key={item.id} item={item} onUpdate={updateTechnologyWorkItem} />)}</div></section>
+        <section className="mt-5 rounded-2xl border border-slate-200/80 bg-white shadow-[0_5px_20px_rgba(21,36,58,0.035)]">
+          <div className="border-b border-slate-100 p-5 sm:p-6">
+            <div className="flex items-center gap-2">
+              <span className="grid size-8 place-items-center rounded-lg bg-[#e8f8f2] text-[#168465]">
+                <CheckCircle2 size={16} />
+              </span>
+              <div>
+                <h2 className="font-display text-[16px] font-bold text-[#152239]">
+                  Upcoming deadlines
+                </h2>
+                <p className="mt-1 text-[11px] text-slate-400">
+                  The accountability queue generated from the deadlines table.
+                </p>
+              </div>
+            </div>
+          </div>
+          {deadlinesState === "loading" && <SectionLoading label="deadlines" />}
+          {deadlinesState === "error" && (
+            <SectionError label="deadlines" message={operationsQuery.error?.message} />
+          )}
+          {deadlinesState === "empty" && (
+            <SectionEmpty
+              label="open deadlines"
+              hint="Add the first deadline using the form above."
+            />
+          )}
+          {deadlinesState === "ready" && (
+            <div className="divide-y divide-slate-100">
+              {openDeadlines.length === 0 ? (
+                <p className="p-8 text-center text-[11px] text-slate-400">
+                  No open deadlines. Every item is resolved.
+                </p>
+              ) : (
+                openDeadlines.map((deadline) => {
+                  const ownerName = (() => {
+                    if (!deadline.owner_employee_id) return "Unassigned";
+                    const employee = employees.find(
+                      (candidate) => candidate.id === deadline.owner_employee_id,
+                    );
+                    return employee
+                      ? `${employee.first_name} ${employee.last_name}`.trim()
+                      : "Unassigned";
+                  })();
+                  return (
+                    <div
+                      key={deadline.id}
+                      className="grid gap-3 p-5 sm:grid-cols-[minmax(0,1.2fr)_150px_160px_auto] sm:items-center sm:px-6"
+                    >
+                      <div>
+                        <p className="text-[11px] font-bold text-slate-700">{deadline.title}</p>
+                        <p className="mt-1 text-[10px] text-slate-400">
+                          {deadline.priority} priority
+                          {deadline.description ? ` · ${deadline.description}` : ""}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-[10px] uppercase tracking-[0.12em] text-slate-400">
+                          Due
+                        </p>
+                        <p className="mt-1 text-[11px] font-semibold text-slate-600">
+                          {formatDate(deadline.due_at)}
+                        </p>
+                      </div>
+                      <div className="min-w-[140px]">
+                        <p className="text-[10px] uppercase tracking-[0.12em] text-slate-400">
+                          Owner
+                        </p>
+                        <p className="mt-1 text-[11px] font-semibold text-slate-600">
+                          {ownerName}
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <select
+                          value={deadline.status}
+                          onChange={(e) =>
+                            void updateDeadline.mutateAsync({
+                              id: deadline.id,
+                              status: e.target.value as DeadlineInput["status"],
+                            })
+                          }
+                          className={cn(
+                            "rounded-full border-0 px-2.5 py-1.5 text-[10px] font-bold outline-none",
+                            deadline.status === "completed"
+                              ? "bg-[#e8f8f2] text-[#168465]"
+                              : deadline.status === "overdue"
+                                ? "bg-[#ffe5e3] text-[#bd504d]"
+                                : "bg-[#fff2d9] text-[#9a6419]",
+                          )}
+                        >
+                          <option value="open">Open</option>
+                          <option value="completed">Done</option>
+                          <option value="overdue">Blocked</option>
+                          <option value="cancelled">Cancelled</option>
+                        </select>
+                        <button
+                          type="button"
+                          onClick={() => void deleteDeadline.mutateAsync(deadline.id)}
+                          className="rounded-lg p-2 text-slate-400 hover:bg-[#fff0ee] hover:text-[#bd504d]"
+                          aria-label={`Delete ${deadline.title}`}
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          )}
+        </section>
 
-    <section id="record" className="mt-5 grid gap-5 xl:grid-cols-[minmax(0,1.1fr)_minmax(310px,.9fr)]"><form onSubmit={submitMeeting} className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-[0_5px_20px_rgba(21,36,58,0.035)] sm:p-6"><div className="flex items-start justify-between gap-3"><div><div className="flex items-center gap-2"><span className="grid size-8 place-items-center rounded-lg bg-[#eaf3ff] text-[#4a87c9]"><CalendarDays size={16} /></span><h2 className="font-display text-[16px] font-bold text-[#152239]">{editingMeetingId ? "Edit meeting record" : "Record a meeting"}</h2></div><p className="mt-2 text-[11px] text-slate-400">Capture the conversation while it is fresh. Decisions can be converted into deadlines below.</p></div>{editingMeetingId && <button type="button" onClick={() => { setEditingMeetingId(null); setMeetingForm(emptyMeeting); }} className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-50" aria-label="Cancel editing"><X size={16} /></button>}</div><div className="mt-5 grid gap-3 sm:grid-cols-2"><label className="text-[10px] font-bold text-slate-500 sm:col-span-2">Meeting title<input required value={meetingForm.title} onChange={(e) => setMeetingForm((current) => ({ ...current, title: e.target.value }))} className="form-input" placeholder="e.g. Weekly operating review" /></label><label className="text-[10px] font-bold text-slate-500">Date<input required type="date" value={meetingForm.date} onChange={(e) => setMeetingForm((current) => ({ ...current, date: e.target.value }))} className="form-input" /></label><label className="text-[10px] font-bold text-slate-500">Time<input required type="time" value={meetingForm.time} onChange={(e) => setMeetingForm((current) => ({ ...current, time: e.target.value }))} className="form-input" /></label><label className="text-[10px] font-bold text-slate-500 sm:col-span-2">Attendees<input value={meetingForm.attendees} onChange={(e) => setMeetingForm((current) => ({ ...current, attendees: e.target.value }))} className="form-input" placeholder="Names or teams" /></label><label className="text-[10px] font-bold text-slate-500 sm:col-span-2">Record / notes<textarea required value={meetingForm.notes} onChange={(e) => setMeetingForm((current) => ({ ...current, notes: e.target.value }))} className="form-input min-h-28 resize-y" placeholder="What was discussed?" /></label><label className="text-[10px] font-bold text-slate-500 sm:col-span-2">Decisions and context<textarea value={meetingForm.decisions} onChange={(e) => setMeetingForm((current) => ({ ...current, decisions: e.target.value }))} className="form-input min-h-20 resize-y" placeholder="What was agreed?" /></label><label className="text-[10px] font-bold text-slate-500">Record status<select value={meetingForm.status} onChange={(e) => setMeetingForm((current) => ({ ...current, status: e.target.value as Meeting["status"] }))} className="form-input"><option>Planned</option><option>Held</option><option>Cancelled</option></select></label><div className="flex items-end"><button className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-[#4a87c9] px-3.5 py-2.5 text-[11px] font-bold text-white hover:bg-[#376fa9]"><Save size={14} /> {editingMeetingId ? "Update record" : "Save meeting"}</button></div></div></form>
-
-      <form onSubmit={submitDeadline} className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-[0_5px_20px_rgba(21,36,58,0.035)] sm:p-6"><div className="flex items-center gap-2"><span className="grid size-8 place-items-center rounded-lg bg-[#fff2d9] text-[#b3781f]"><ClipboardCheck size={16} /></span><h2 className="font-display text-[16px] font-bold text-[#152239]">Add a meeting deadline</h2></div><p className="mt-2 text-[11px] text-slate-400">Make the owner, date and follow-up explicit.</p><div className="mt-5 space-y-3"><label className="block text-[10px] font-bold text-slate-500">From meeting<select value={deadlineForm.meetingId} onChange={(e) => setDeadlineForm((current) => ({ ...current, meetingId: e.target.value }))} className="form-input"><option value="">Select a meeting</option>{meetings.map((meeting) => <option key={meeting.id} value={meeting.id}>{meeting.title}</option>)}</select></label><label className="block text-[10px] font-bold text-slate-500">Deadline<input required value={deadlineForm.title} onChange={(e) => setDeadlineForm((current) => ({ ...current, title: e.target.value }))} className="form-input" placeholder="What must happen?" /></label><div className="grid gap-3 sm:grid-cols-2"><label className="block text-[10px] font-bold text-slate-500">Due date<input required type="date" value={deadlineForm.dueDate} onChange={(e) => setDeadlineForm((current) => ({ ...current, dueDate: e.target.value }))} className="form-input" /></label><label className="block text-[10px] font-bold text-slate-500">Owner<input required value={deadlineForm.owner} onChange={(e) => setDeadlineForm((current) => ({ ...current, owner: e.target.value }))} className="form-input" placeholder="Person accountable" /></label></div><label className="block text-[10px] font-bold text-slate-500">Follow-up details<textarea value={deadlineForm.followUp} onChange={(e) => setDeadlineForm((current) => ({ ...current, followUp: e.target.value }))} className="form-input min-h-24 resize-y" placeholder="Evidence, next check-in or dependency" /></label><button disabled={!meetings.length} className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-[#b3781f] px-3.5 py-2.5 text-[11px] font-bold text-white hover:bg-[#925f13] disabled:cursor-not-allowed disabled:opacity-40"><Plus size={14} /> Add deadline</button></div></form></section>
-
-    <section className="mt-5 rounded-2xl border border-slate-200/80 bg-white shadow-[0_5px_20px_rgba(21,36,58,0.035)]"><div className="border-b border-slate-100 p-5 sm:p-6"><div className="flex items-center gap-2"><span className="grid size-8 place-items-center rounded-lg bg-[#e8f8f2] text-[#168465]"><CheckCircle2 size={16} /></span><h2 className="font-display text-[16px] font-bold text-[#152239]">Upcoming deadlines</h2></div><p className="mt-2 text-[11px] text-slate-400">The accountability queue generated from recorded meetings.</p></div><div className="divide-y divide-slate-100">{openDeadlines.map((deadline) => <div key={deadline.id} className="grid gap-3 p-5 sm:grid-cols-[minmax(0,1.2fr)_150px_160px_auto] sm:items-center sm:px-6"><div><p className="text-[11px] font-bold text-slate-700">{deadline.title}</p><p className="mt-1 text-[10px] text-slate-400">{meetingName(deadline.meetingId)}{deadline.followUp ? ` · ${deadline.followUp}` : ""}</p></div><div><p className="text-[10px] uppercase tracking-[0.12em] text-slate-400">Due</p><p className="mt-1 text-[11px] font-semibold text-slate-600">{formatDate(deadline.dueDate)}</p></div><label className="text-[10px] font-bold text-slate-500">Owner<input value={deadline.owner} onChange={(e) => updateMeetingDeadline(deadline.id, { owner: e.target.value })} className="form-input" /></label><div className="flex items-center gap-2"><select value={deadline.status} onChange={(e) => updateMeetingDeadline(deadline.id, { status: e.target.value as MeetingDeadline["status"] })} className={cn("rounded-full border-0 px-2.5 py-1.5 text-[10px] font-bold outline-none", deadline.status === "Blocked" ? "bg-[#ffe5e3] text-[#bd504d]" : "bg-[#fff2d9] text-[#9a6419]")}><option>Open</option><option>In progress</option><option>Blocked</option><option>Done</option></select><button type="button" onClick={() => deleteMeetingDeadline(deadline.id)} className="rounded-lg p-2 text-slate-400 hover:bg-[#fff0ee] hover:text-[#bd504d]" aria-label={`Delete ${deadline.title}`}><Trash2 size={14} /></button></div></div>)}{!openDeadlines.length && <p className="p-8 text-center text-[11px] text-slate-400">No open deadlines yet. Record a meeting and add its first action.</p>}</div></section>
-
-    <section className="mt-5 rounded-2xl border border-slate-200/80 bg-white shadow-[0_5px_20px_rgba(21,36,58,0.035)]"><div className="border-b border-slate-100 p-5 sm:p-6"><div className="flex items-center gap-2"><span className="grid size-8 place-items-center rounded-lg bg-[#eaf3ff] text-[#4a87c9]"><FileText size={16} /></span><h2 className="font-display text-[16px] font-bold text-[#152239]">Meeting records</h2></div><p className="mt-2 text-[11px] text-slate-400">Every record remains editable and traceable to a manual source until sync is connected.</p></div><div className="divide-y divide-slate-100">{meetings.map((meeting) => <article key={meeting.id} className="p-5 sm:px-6"><div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-start"><div><div className="flex flex-wrap items-center gap-2"><h3 className="text-[12px] font-bold text-slate-700">{meeting.title}</h3><span className="rounded-full bg-[#eaf3ff] px-2 py-1 text-[10px] font-bold text-[#4a87c9]">{meeting.status}</span></div><p className="mt-1 text-[10px] text-slate-400">{formatDate(meeting.date)} at {meeting.time} · {meeting.attendees || "No attendees listed"}</p></div><div className="flex items-center gap-1"><button type="button" onClick={() => startEditingMeeting(meeting)} className="rounded-lg p-2 text-slate-400 hover:bg-slate-50 hover:text-slate-700" aria-label={`Edit ${meeting.title}`}><Pencil size={14} /></button><button type="button" onClick={() => deleteMeeting(meeting.id)} className="rounded-lg p-2 text-slate-400 hover:bg-[#fff0ee] hover:text-[#bd504d]" aria-label={`Delete ${meeting.title}`}><Trash2 size={14} /></button></div></div><p className="mt-3 whitespace-pre-wrap text-[11px] leading-5 text-slate-500">{meeting.notes}</p>{meeting.decisions && <p className="mt-3 rounded-xl bg-[#f7f9fb] p-3 text-[11px] leading-5 text-slate-500"><span className="font-bold text-slate-700">Decisions:</span> {meeting.decisions}</p>}</article>)}{!meetings.length && <p className="p-8 text-center text-[11px] text-slate-400">No meeting records yet. Use the form above to create the first one.</p>}</div></section>
-  </div></AppShell>;
-}
-
-function SummaryCard({ label, value, detail, icon: Icon }: { label: string; value: string; detail: string; icon: React.ElementType }) {
-  return <div className="rounded-2xl border border-slate-200/80 bg-white p-4 shadow-[0_5px_20px_rgba(21,36,58,0.035)]"><div className="flex items-center justify-between"><p className="text-[10px] text-slate-400">{label}</p><Icon size={16} className="text-[#755bc0]" /></div><p className="mt-2 font-display text-[23px] font-bold tracking-[-0.06em] text-[#152239]">{value}</p><p className="mt-1 text-[10px] font-semibold text-[#755bc0]">{detail}</p></div>;
-}
-
-function TargetRow({ target, onUpdate, onDelete }: { target: DepartmentTarget; onUpdate: (id: string, patch: Partial<DepartmentTarget>) => void; onDelete: () => void }) {
-  return <tr className="border-b border-[#eeeaf9] text-[11px] last:border-0"><td className="px-3 py-3 font-semibold text-slate-600">{target.department}</td><td className="px-3 py-3 text-slate-500">{target.metric}</td><td className="px-3 py-3"><input type="number" min="0" value={target.actual} onChange={(e) => onUpdate(target.id, { actual: Number(e.target.value) })} className="w-20 rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-[11px] outline-none focus:border-[#b7a9e5]" /></td><td className="px-3 py-3"><input type="number" min="0" value={target.target} onChange={(e) => onUpdate(target.id, { target: Number(e.target.value), status: Number(e.target.value) > 0 ? "At risk" : "Not set" })} className="w-20 rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-[11px] outline-none focus:border-[#b7a9e5]" /></td><td className="px-3 py-3"><input value={target.owner} onChange={(e) => onUpdate(target.id, { owner: e.target.value })} className="w-36 rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-[11px] outline-none focus:border-[#b7a9e5]" /></td><td className="px-3 py-3"><select value={target.status} onChange={(e) => onUpdate(target.id, { status: e.target.value as DepartmentTarget["status"] })} className={cn("rounded-full border-0 px-2 py-1.5 text-[10px] font-bold outline-none", target.status === "Outstanding" ? "bg-[#ffe5e3] text-[#bd504d]" : target.status === "On track" ? "bg-[#e8f8f2] text-[#168465]" : "bg-[#fff2d9] text-[#9a6419]")}><option>Not set</option><option>On track</option><option>At risk</option><option>Outstanding</option></select></td><td className="px-3 py-3"><button type="button" onClick={onDelete} className="rounded-lg p-2 text-slate-400 hover:bg-[#fff0ee] hover:text-[#bd504d]" aria-label={`Delete ${target.department} ${target.metric} target`}><Trash2 size={14} /></button></td></tr>;
-}
-
-function TechnologyRow({ item, onUpdate }: { item: TechnologyWorkItem; onUpdate: (id: string, patch: Partial<TechnologyWorkItem>) => void }) {
-  return <div className="rounded-xl border border-[#f0cdca] bg-white p-4"><div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-start"><div><div className="flex flex-wrap items-center gap-2"><p className="text-[12px] font-bold text-slate-700">{item.title}</p><span className={cn("rounded-full px-2 py-1 text-[10px] font-bold", item.status === "Done" ? "bg-[#e8f8f2] text-[#168465]" : item.status === "In progress" ? "bg-[#fff2d9] text-[#9a6419]" : "bg-[#ffe5e3] text-[#bd504d]")}>{item.status}</span></div><p className="mt-2 text-[10px] leading-5 text-slate-400">{item.followUp}</p></div><div className="flex items-center gap-2"><input value={item.owner} onChange={(e) => onUpdate(item.id, { owner: e.target.value })} className="w-36 rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-[10px] outline-none focus:border-[#e2a5a0]" aria-label={`Owner for ${item.title}`} /><select value={item.status} onChange={(e) => onUpdate(item.id, { status: e.target.value as TechnologyWorkItem["status"] })} className="rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-[10px] font-bold text-slate-600 outline-none"><option>Outstanding</option><option>In progress</option><option>Done</option></select></div></div></div>;
+        <section className="mt-5 rounded-2xl border border-slate-200/80 bg-white shadow-[0_5px_20px_rgba(21,36,58,0.035)]">
+          <div className="border-b border-slate-100 p-5 sm:p-6">
+            <div className="flex items-center gap-2">
+              <span className="grid size-8 place-items-center rounded-lg bg-[#eaf3ff] text-[#4a87c9]">
+                <FileText size={16} />
+              </span>
+              <div>
+                <h2 className="font-display text-[16px] font-bold text-[#152239]">
+                  Meeting records
+                </h2>
+                <p className="mt-1 text-[11px] text-slate-400">
+                  Every record remains editable and traceable to the meetings table.
+                </p>
+              </div>
+            </div>
+          </div>
+          {meetingsState === "loading" && <SectionLoading label="meeting records" />}
+          {meetingsState === "error" && (
+            <SectionError label="meeting records" message={meetingsQuery.error?.message} />
+          )}
+          {meetingsState === "empty" && (
+            <SectionEmpty
+              label="meeting records"
+              hint="Use the form above to create the first one."
+            />
+          )}
+          {meetingsState === "ready" && (
+            <div className="divide-y divide-slate-100">
+              {[...meetings]
+                .sort((a, b) => b.meeting_date.localeCompare(a.meeting_date))
+                .map((meeting) => (
+                  <article key={meeting.id} className="p-5 sm:px-6">
+                    <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-start">
+                      <div>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <h3 className="text-[12px] font-bold text-slate-700">
+                            {meeting.title}
+                          </h3>
+                          <span
+                            className={cn(
+                              "rounded-full px-2 py-1 text-[10px] font-bold",
+                              meeting.status === "completed"
+                                ? "bg-[#e8f8f2] text-[#168465]"
+                                : meeting.status === "cancelled"
+                                  ? "bg-[#ffe5e3] text-[#bd504d]"
+                                  : "bg-[#eaf3ff] text-[#4a87c9]",
+                            )}
+                          >
+                            {meeting.status === "scheduled"
+                              ? "Planned"
+                              : meeting.status === "in_progress"
+                                ? "In progress"
+                                : meeting.status === "completed"
+                                  ? "Held"
+                                  : "Cancelled"}
+                          </span>
+                          <span className="rounded-full bg-slate-100 px-2 py-1 text-[9px] font-bold text-slate-500">
+                            {meeting.meeting_type.replace(/_/g, " ")}
+                          </span>
+                        </div>
+                        <p className="mt-1 text-[10px] text-slate-400">
+                          {formatDate(meeting.meeting_date)}
+                          {meeting.duration_minutes
+                            ? ` · ${meeting.duration_minutes} min`
+                            : ""}
+                          {meeting.location ? ` · ${meeting.location}` : ""}
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => startEditingMeeting(meeting)}
+                          className="rounded-lg p-2 text-slate-400 hover:bg-slate-50 hover:text-slate-700"
+                          aria-label={`Edit ${meeting.title}`}
+                        >
+                          <Pencil size={14} />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (window.confirm(`Delete ${meeting.title}?`)) {
+                              void deleteMeeting.mutateAsync(meeting.id);
+                            }
+                          }}
+                          className="rounded-lg p-2 text-slate-400 hover:bg-[#fff0ee] hover:text-[#bd504d]"
+                          aria-label={`Delete ${meeting.title}`}
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      </div>
+                    </div>
+                    {meeting.notes && (
+                      <p className="mt-3 whitespace-pre-wrap text-[11px] leading-5 text-slate-500">
+                        {meeting.notes}
+                      </p>
+                    )}
+                    {meeting.summary && (
+                      <p className="mt-3 rounded-xl bg-[#f7f9fb] p-3 text-[11px] leading-5 text-slate-500">
+                        <span className="font-bold text-slate-700">Decisions:</span>{" "}
+                        {meeting.summary}
+                      </p>
+                    )}
+                  </article>
+                ))}
+            </div>
+          )}
+        </section>
+      </div>
+    </AppShell>
+  );
 }

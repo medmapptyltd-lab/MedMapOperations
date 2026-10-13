@@ -31,8 +31,21 @@ import {
   isResolvedStatus,
   useExecutiveAlerts,
 } from "@/lib/executive-dashboard";
+import {
+  classifyRoleKind,
+  type RoleKind,
+} from "@/lib/role-classify";
+import type { LucideIcon } from "lucide-react";
 
-const navItems = [
+type NavItem = {
+  label: string;
+  section: string;
+  icon: LucideIcon;
+  path?: string;
+  roles?: RoleKind[];
+};
+
+const navItems: NavItem[] = [
   { label: "Command centre", section: "overview", icon: LayoutDashboard },
   {
     label: "Organisation",
@@ -52,24 +65,31 @@ const navItems = [
     section: "doctor-acquisition",
     icon: Stethoscope,
     path: "/doctor-acquisition",
+    roles: ["ceo", "coo", "department_head", "manager", "executive_other"],
   },
   {
     label: "Ambassador Programme",
     section: "ambassadors",
     icon: Users,
     path: "/ambassadors",
+    roles: ["ceo", "coo", "department_head", "manager", "executive_other"],
   },
-  { label: "Sales", section: "sales", icon: BriefcaseBusiness, path: "/sales" },
+  { label: "Sales", section: "sales", icon: BriefcaseBusiness, path: "/sales",
+    roles: ["ceo", "coo", "department_head", "manager", "executive_other"] },
   {
     label: "Customer Operations",
     section: "customer-operations",
     icon: LifeBuoy,
     path: "/customer-operations",
   },
-  { label: "Product", section: "product", icon: Boxes, path: "/product" },
-  { label: "Engineering", section: "engineering", icon: GitBranch, path: "/engineering" },
-  { label: "Security", section: "security", icon: ShieldCheck, path: "/security" },
-  { label: "People & goals", section: "people", icon: Users, path: "/people" },
+  { label: "Product", section: "product", icon: Boxes, path: "/product",
+    roles: ["ceo", "cto", "executive_other", "department_head", "manager"] },
+  { label: "Engineering", section: "engineering", icon: GitBranch, path: "/engineering",
+    roles: ["ceo", "cto", "executive_other", "department_head", "manager"] },
+  { label: "Security", section: "security", icon: ShieldCheck, path: "/security",
+    roles: ["ceo", "cto", "executive_other"] },
+  { label: "People & goals", section: "people", icon: Users, path: "/people",
+    roles: ["ceo", "executive_other", "department_head", "manager"] },
   {
     label: "Meetings & deadlines",
     section: "meetings",
@@ -81,34 +101,63 @@ const navItems = [
     section: "finance",
     icon: Gauge,
     path: "/finance",
+    roles: ["ceo", "executive_other"],
   },
   {
     label: "Technology",
     section: "technology",
     icon: Zap,
     path: "/technology",
+    roles: ["ceo", "cto", "executive_other"],
   },
   {
     label: "Risk & governance",
     section: "governance",
     icon: ShieldCheck,
     path: "/risk",
+    roles: ["ceo", "executive_other", "cto", "coo"],
   },
-  { label: "Reports", section: "reports", icon: FileText, path: "/reports" },
+  { label: "Reports", section: "reports", icon: FileText, path: "/reports",
+    roles: ["ceo", "executive_other", "coo", "cto", "department_head", "manager"] },
   {
     label: "Administration",
     section: "admin",
     icon: Settings2,
     path: "/admin",
+    roles: ["ceo", "executive_other"],
   },
 ];
+
+function filterNavItemsByRole(items: NavItem[], state: ReturnType<typeof useCurrentEmployee>): NavItem[] {
+  if (state.status !== "active") {
+    return items.filter((it) => !it.roles);
+  }
+  if (state.isExecutive === true && (!state.roleMeta?.name || !state.employee)) {
+    return items;
+  }
+  const roleKind = state.employee && state.roleMeta
+    ? classifyRoleKind({
+        job_title: state.employee.job_title ?? null,
+        roleName: state.roleMeta.name ?? null,
+        roleLevel: state.roleMeta.role_level ?? null,
+        isExecutive: state.isExecutive,
+      })
+    : "employee" as RoleKind;
+  return items.filter((it) => {
+    if (!it.roles) return true;
+    if (state.isExecutive === true) return true;
+    return it.roles.includes(roleKind);
+  });
+}
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const location = useLocation();
   const navigate = useNavigate();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [query, setQuery] = useState("");
-  const { employee } = useCurrentEmployee();
+  const employeeState = useCurrentEmployee();
+  const { employee } = employeeState;
+  const filteredNav = filterNavItemsByRole(navItems, employeeState);
   const { signOut } = useSupabaseAuth();
   const alerts = useExecutiveAlerts();
   const liveAlertRows = (alerts.data ?? []).filter(
@@ -215,7 +264,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           Workspace
         </div>
         <nav className="mt-3 space-y-1">
-          {navItems.map(({ label, section, icon: Icon, path }, index) => {
+          {filteredNav.map(({ label, section, icon: Icon, path }, index) => {
             const active = path
               ? location.pathname === path
               : index === 0 && location.pathname === "/";

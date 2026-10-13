@@ -6,14 +6,32 @@ import {
   Mail,
   Phone,
   ShieldCheck,
+  UserPlus,
   UsersRound,
+  X,
+  Ban,
 } from "lucide-react";
 import { AppShell } from "@/components/medmap/AppShell";
+import { IfPermitted } from "@/components/medmap/IfPermitted";
 import {
   usePeopleOrganisation,
   type OrganisationEmployee,
 } from "@/lib/people-organization-dashboard";
+import { usePeopleMutations } from "@/lib/crud";
 import { cn } from "@/lib/utils";
+
+type EmployeeDraft = {
+  firstName: string;
+  lastName: string;
+  email: string;
+  phone: string;
+  roleId: string;
+  departmentId: string;
+  teamId: string;
+  managerId: string;
+  jobTitle: string;
+  startDate: string;
+};
 
 function formatDate(value: string | null) {
   if (!value) return "Not provided";
@@ -47,7 +65,30 @@ function ErrorState() {
   );
 }
 
-function EmployeeSummary({ employee }: { employee: OrganisationEmployee }) {
+function AuthLinkBadge({ employee }: { employee: OrganisationEmployee }) {
+  if (!employee.auth_user_id) {
+    return (
+      <span className="inline-flex w-fit items-center gap-1.5 rounded-full bg-[#fff2d9] px-3 py-1 text-[10px] font-bold text-amber-700">
+        Employee record only — Not linked to application sign-in
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex w-fit items-center gap-1.5 rounded-full bg-[#e8f8f2] px-3 py-1 text-[10px] font-bold text-[#168465]">
+      Linked application user
+    </span>
+  );
+}
+
+function EmployeeSummary({
+  employee,
+  onInactivate,
+  inactivatePending,
+}: {
+  employee: OrganisationEmployee;
+  onInactivate: () => void;
+  inactivatePending: boolean;
+}) {
   const teamLabel = employee.team?.name ?? employee.team_id ?? "Not provided";
   const departmentLabel =
     employee.department?.name ?? employee.department_id ?? "Not provided";
@@ -55,6 +96,7 @@ function EmployeeSummary({ employee }: { employee: OrganisationEmployee }) {
   const managerLabel = employee.manager
     ? displayName(employee.manager)
     : employee.manager_id ?? "Not provided";
+  const isActive = employee.employee_status.toLowerCase() === "active";
 
   return (
     <article className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-[0_5px_20px_rgba(21,36,58,0.035)] sm:p-6">
@@ -77,11 +119,27 @@ function EmployeeSummary({ employee }: { employee: OrganisationEmployee }) {
             <p className="mt-1 text-[12px] text-slate-500">
               {employee.job_title || "Job title not provided"}
             </p>
+            <div className="mt-3">
+              <AuthLinkBadge employee={employee} />
+            </div>
           </div>
         </div>
-        <span className="inline-flex w-fit rounded-full bg-[#e8f8f2] px-2.5 py-1 text-[10px] font-bold text-[#168465]">
-          {employee.employee_status || "Status not provided"}
-        </span>
+        <div className="flex flex-col items-end gap-2">
+          <span className="inline-flex w-fit rounded-full bg-[#e8f8f2] px-2.5 py-1 text-[10px] font-bold text-[#168465]">
+            {employee.employee_status || "Status not provided"}
+          </span>
+          {isActive && (
+            <button
+              type="button"
+              onClick={onInactivate}
+              disabled={inactivatePending}
+              className="inline-flex items-center gap-1.5 rounded-xl border border-[#f0cdca] bg-[#fff8f7] px-3 py-2 text-[10px] font-bold text-[#bd504d] hover:bg-[#fff0ee] disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              <Ban size={13} />
+              {inactivatePending ? "Inactivating..." : "Inactivate"}
+            </button>
+          )}
+        </div>
       </div>
 
       <div className="mt-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
@@ -122,10 +180,6 @@ function EmployeeSummary({ employee }: { employee: OrganisationEmployee }) {
           </p>
         )}
       </div>
-
-      <p className="mt-4 text-[10px] leading-5 text-slate-400">
-        This directory is read-only in this phase. Employee changes remain governed by backend permissions and policies.
-      </p>
     </article>
   );
 }
@@ -152,8 +206,25 @@ function Detail({
 
 export default function People() {
   const { data, isPending, isError } = usePeopleOrganisation();
+  const peopleMutations = usePeopleMutations();
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [showAddModal, setShowAddModal] = useState(false);
+  const [draft, setDraft] = useState<EmployeeDraft>({
+    firstName: "",
+    lastName: "",
+    email: "",
+    phone: "",
+    roleId: "",
+    departmentId: "",
+    teamId: "",
+    managerId: "",
+    jobTitle: "",
+    startDate: new Date().toISOString().slice(0, 10),
+  });
   const employees = data?.employees ?? [];
+  const roles = data?.roles ?? [];
+  const departments = data?.departments ?? [];
+  const teams = data?.teams ?? [];
 
   useEffect(() => {
     if (!employees.length) {
@@ -170,6 +241,58 @@ export default function People() {
     employee.employee_status.toLowerCase() === "active",
   ).length;
 
+  const updateDraft = (key: keyof EmployeeDraft, value: string) =>
+    setDraft((current) => ({ ...current, [key]: value }));
+
+  const resetDraft = () =>
+    setDraft({
+      firstName: "",
+      lastName: "",
+      email: "",
+      phone: "",
+      roleId: "",
+      departmentId: "",
+      teamId: "",
+      managerId: "",
+      jobTitle: "",
+      startDate: new Date().toISOString().slice(0, 10),
+    });
+
+  const submitEmployee = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!draft.firstName.trim() || !draft.lastName.trim()) return;
+    try {
+      await peopleMutations.createEmployee.mutateAsync({
+        firstName: draft.firstName.trim(),
+        lastName: draft.lastName.trim(),
+        email: draft.email.trim() || null,
+        phone: draft.phone.trim() || null,
+        roleId: draft.roleId || null,
+        departmentId: draft.departmentId || null,
+        teamId: draft.teamId || null,
+        managerId: draft.managerId || null,
+        jobTitle: draft.jobTitle.trim() || null,
+        employeeStatus: "active",
+        startDate: draft.startDate || null,
+      });
+      resetDraft();
+      setShowAddModal(false);
+    } catch {
+      return;
+    }
+  };
+
+  const handleInactivate = async (employeeId: string) => {
+    try {
+      await peopleMutations.inactivateEmployee.mutateAsync({
+        id: employeeId,
+        endDate: new Date().toISOString().slice(0, 10),
+      });
+    } catch {
+      return;
+    }
+  };
+
   return (
     <AppShell>
       <div className="mx-auto max-w-[1440px] px-5 pb-12 pt-8 sm:px-8 xl:px-10">
@@ -185,10 +308,206 @@ export default function People() {
               Employee, role, department, team and reporting information returned for the authenticated organisation.
             </p>
           </div>
-          <span className="text-[10px] font-semibold text-slate-400">
-            Supabase-backed · organisation scoped
-          </span>
+          <div className="flex flex-col items-start gap-3 md:items-end">
+            <IfPermitted
+              roleKinds={["ceo", "coo", "cto", "executive_other", "department_head", "manager"]}
+            >
+              <button
+                type="button"
+                onClick={() => setShowAddModal(true)}
+                className="inline-flex items-center gap-2 self-start rounded-xl bg-[#182842] px-3.5 py-2.5 text-[11px] font-bold text-white shadow-[0_5px_12px_rgba(20,35,58,.15)] hover:bg-[#233958] md:self-auto"
+              >
+                <UserPlus size={15} /> Add Employee
+              </button>
+            </IfPermitted>
+            <span className="text-[10px] font-semibold text-slate-400">
+              Supabase-backed · organisation scoped
+            </span>
+          </div>
         </div>
+
+        {showAddModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4">
+            <form
+              onSubmit={submitEmployee}
+              className="w-full max-w-2xl rounded-2xl border border-slate-200 bg-white p-5 shadow-xl sm:p-6"
+            >
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="grid size-8 place-items-center rounded-lg bg-[#f1edff] text-[#755bc0]">
+                      <UserPlus size={16} />
+                    </span>
+                    <h2 className="font-display text-[16px] font-bold text-[#152239]">
+                      Add Employee
+                    </h2>
+                  </div>
+                  <p className="mt-2 text-[11px] text-slate-500">
+                    Create a new backend employee record.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowAddModal(false);
+                    resetDraft();
+                  }}
+                  className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100"
+                  aria-label="Close employee form"
+                >
+                  <X size={16} />
+                </button>
+              </div>
+              <div className="mt-5 grid gap-3 sm:grid-cols-2">
+                <label className="text-[10px] font-bold text-slate-500">
+                  First name *
+                  <input
+                    required
+                    value={draft.firstName}
+                    onChange={(event) => updateDraft("firstName", event.target.value)}
+                    className="form-input"
+                    placeholder="First name"
+                  />
+                </label>
+                <label className="text-[10px] font-bold text-slate-500">
+                  Last name *
+                  <input
+                    required
+                    value={draft.lastName}
+                    onChange={(event) => updateDraft("lastName", event.target.value)}
+                    className="form-input"
+                    placeholder="Last name"
+                  />
+                </label>
+                <label className="text-[10px] font-bold text-slate-500">
+                  Email
+                  <input
+                    type="email"
+                    value={draft.email}
+                    onChange={(event) => updateDraft("email", event.target.value)}
+                    className="form-input"
+                    placeholder="employee@company.com"
+                  />
+                </label>
+                <label className="text-[10px] font-bold text-slate-500">
+                  Phone
+                  <input
+                    value={draft.phone}
+                    onChange={(event) => updateDraft("phone", event.target.value)}
+                    className="form-input"
+                    placeholder="+27 00 000 0000"
+                  />
+                </label>
+                <label className="text-[10px] font-bold text-slate-500">
+                  Role
+                  <select
+                    value={draft.roleId}
+                    onChange={(event) => updateDraft("roleId", event.target.value)}
+                    className="form-input"
+                  >
+                    <option value="">No role</option>
+                    {roles.filter((role) => role.active).map((role) => (
+                      <option key={role.id} value={role.id}>
+                        {role.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="text-[10px] font-bold text-slate-500">
+                  Department
+                  <select
+                    value={draft.departmentId}
+                    onChange={(event) => updateDraft("departmentId", event.target.value)}
+                    className="form-input"
+                  >
+                    <option value="">No department</option>
+                    {departments.filter((dept) => dept.active).map((dept) => (
+                      <option key={dept.id} value={dept.id}>
+                        {dept.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="text-[10px] font-bold text-slate-500">
+                  Team
+                  <select
+                    value={draft.teamId}
+                    onChange={(event) => updateDraft("teamId", event.target.value)}
+                    className="form-input"
+                  >
+                    <option value="">No team</option>
+                    {teams.filter((team) => team.active).map((team) => (
+                      <option key={team.id} value={team.id}>
+                        {team.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="text-[10px] font-bold text-slate-500">
+                  Manager
+                  <select
+                    value={draft.managerId}
+                    onChange={(event) => updateDraft("managerId", event.target.value)}
+                    className="form-input"
+                  >
+                    <option value="">No manager</option>
+                    {employees.map((employee) => (
+                      <option key={employee.id} value={employee.id}>
+                        {displayName(employee)}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="text-[10px] font-bold text-slate-500">
+                  Job title
+                  <input
+                    value={draft.jobTitle}
+                    onChange={(event) => updateDraft("jobTitle", event.target.value)}
+                    className="form-input"
+                    placeholder="e.g. Senior Operations Manager"
+                  />
+                </label>
+                <label className="text-[10px] font-bold text-slate-500">
+                  Start date
+                  <input
+                    type="date"
+                    value={draft.startDate}
+                    onChange={(event) => updateDraft("startDate", event.target.value)}
+                    className="form-input"
+                  />
+                </label>
+              </div>
+              {peopleMutations.createEmployee.isError && (
+                <div className="mt-4">
+                  <p className="rounded-xl border border-[#f0cdca] bg-[#fff8f7] p-3 text-[11px] leading-5 text-[#a34f4b]">
+                    The employee could not be created. Check the connection and try again.
+                  </p>
+                </div>
+              )}
+              <div className="mt-4 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowAddModal(false);
+                    resetDraft();
+                  }}
+                  className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-[11px] font-bold text-slate-500 hover:bg-slate-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={peopleMutations.createEmployee.isPending}
+                  className="rounded-xl bg-[#168465] px-4 py-2.5 text-[11px] font-bold text-white hover:bg-[#126b53] disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {peopleMutations.createEmployee.isPending
+                    ? "Creating..."
+                    : "Create employee"}
+                </button>
+              </div>
+            </form>
+          </div>
+        )}
 
         {isPending ? (
           <p className="mt-7 rounded-xl bg-[#f7f9fb] p-4 text-[11px] text-slate-400">
@@ -259,7 +578,11 @@ export default function People() {
               </section>
 
               {selected ? (
-                <EmployeeSummary employee={selected} />
+                <EmployeeSummary
+                  employee={selected}
+                  onInactivate={() => handleInactivate(selected.id)}
+                  inactivatePending={peopleMutations.inactivateEmployee.isPending}
+                />
               ) : (
                 <section className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-[0_5px_20px_rgba(21,36,58,0.035)] sm:p-6">
                   <EmptyState>No employees are currently recorded.</EmptyState>

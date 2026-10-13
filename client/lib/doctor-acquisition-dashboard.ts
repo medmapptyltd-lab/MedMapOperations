@@ -661,7 +661,7 @@ async function fetchDoctorAcquisitionDashboard(
 ): Promise<DoctorAcquisitionDashboardData> {
   const [acquisitionRows, doctorRows, employeeRows, departmentRows] =
     await Promise.all([
-      selectRows("doctor_acquisition", columns.doctorAcquisition),
+      selectRows("doctor_acquisition", columns.doctorAcquisition, organizationId),
       selectRows("doctors", columns.doctors, organizationId),
       selectRows("employees", columns.employees, organizationId, [
         { column: "employee_status", values: ["active"] },

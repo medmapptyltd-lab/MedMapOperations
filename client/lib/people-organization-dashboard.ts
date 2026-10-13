@@ -68,6 +68,7 @@ export type PeopleOrganisationData = {
   employees: OrganisationEmployee[];
   departments: OrganisationDepartment[];
   teams: OrganisationTeam[];
+  roles: OrganisationRole[];
 };
 
 type QueryState = {
@@ -75,6 +76,7 @@ type QueryState = {
   isPending: boolean;
   isError: boolean;
   error: Error | null;
+  refetch: () => Promise<unknown>;
 };
 
 const employeeColumns = [
@@ -141,19 +143,18 @@ async function fetchPeopleOrganisation(
 
   const permissionLinks = rows<EmployeePermission>(permissionLinksResult.data);
   const permissionIds = [...new Set(permissionLinks.map((link) => link.permission_id))];
-  const [teamsResult, rolesResult, permissionsResult] = await Promise.all([
-    departmentIds.length
-      ? client
-          .from("teams")
-          .select(teamColumns)
-          .in("department_id", departmentIds)
-      : Promise.resolve({ data: [], error: null }),
+  const [teamsResult, rolesResult, allRolesResult, permissionsResult] = await Promise.all([
+    client
+      .from("teams")
+      .select(teamColumns)
+      .in("department_id", departmentIds),
     roleIds.length
       ? client
           .from("roles")
           .select(roleColumns)
           .in("id", [...new Set(roleIds)])
       : Promise.resolve({ data: [], error: null }),
+    client.from("roles").select(roleColumns),
     permissionIds.length
       ? client
           .from("permissions")
@@ -164,14 +165,16 @@ async function fetchPeopleOrganisation(
 
   if (teamsResult.error) throw teamsResult.error;
   if (rolesResult.error) throw rolesResult.error;
+  if (allRolesResult.error) throw allRolesResult.error;
   if (permissionsResult.error) throw permissionsResult.error;
 
   const teams = rows<OrganisationTeam>(teamsResult.data);
   const roles = rows<OrganisationRole>(rolesResult.data);
+  const allRoles = rows<OrganisationRole>(allRolesResult.data);
   const permissions = rows<OrganisationPermission>(permissionsResult.data);
   const departmentById = new Map(departments.map((department) => [department.id, department]));
   const teamById = new Map(teams.map((team) => [team.id, team]));
-  const roleById = new Map(roles.map((role) => [role.id, role]));
+  const roleById = new Map(allRoles.map((role) => [role.id, role]));
   const permissionById = new Map(permissions.map((permission) => [permission.id, permission]));
   const employeeById = new Map(employees.map((employee) => [employee.id, employee]));
   const permissionsByEmployee = new Map<string, string[]>();
@@ -207,6 +210,7 @@ async function fetchPeopleOrganisation(
     organizationId,
     departments,
     teams,
+    roles: allRoles,
     employees: resolvedEmployees.map((employee) => ({
       ...employee,
       manager: employee.manager_id ? resolvedById.get(employee.manager_id) ?? null : null,
@@ -238,5 +242,10 @@ export function usePeopleOrganisation(): QueryState {
     isPending: authLoading || organisationState.isLoading || (enabled && query.isPending),
     isError: Boolean(error),
     error,
+    refetch: () =>
+      Promise.all([
+        organisationState.refetch(),
+        query.refetch().then((r) => r.data),
+      ]),
   };
 }
