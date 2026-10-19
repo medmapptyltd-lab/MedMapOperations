@@ -1,10 +1,8 @@
 import React, { Component, Suspense, useEffect } from "react";
 import { Navigate } from "react-router-dom";
 import { AppShell } from "@/components/medmap/AppShell";
-import { useCurrentEmployee, useCurrentOrganisation } from "@/lib/supabase-identity";
-import { classifyRoleKind, type RoleKind } from "@/lib/role-classify";
-import { useQuery } from "@tanstack/react-query";
-import { getSupabaseClient } from "@/lib/supabase";
+import { useCurrentEmployee } from "@/lib/supabase-identity";
+import { useRoleScope } from "@/lib/dashboard-scope";
 
 const CeoDashboard = React.lazy(() =>
   import("./Index").then((m) => ({ default: m.CeoDashboard })),
@@ -71,55 +69,22 @@ class DashboardRouterErrorBoundary extends Component<
   }
 }
 
-function useGroupDepartmentIds(group: "operations" | "technology", organizationId: string | null) {
-  return useQuery({
-    queryKey: ["group-department-ids", group, organizationId],
-    enabled: Boolean(organizationId),
-    staleTime: 10 * 60 * 1000,
-    queryFn: async () => {
-      const { data, error } = await getSupabaseClient()
-        .from("departments")
-        .select("id")
-        .eq("organization_id", organizationId!)
-        .eq("department_group", group);
-      if (error) throw error;
-      return ((data ?? []) as { id: string }[]).map((row) => row.id).filter(Boolean);
-    },
-  });
-}
-
 export default function DashboardRouter() {
   const identity = useCurrentEmployee();
-  const organisation = useCurrentOrganisation();
-  const organizationId = organisation.organizationId ?? identity.employee?.organization_id ?? null;
+  const { status, employee } = identity;
+  const { roleKind, departmentIds, isPending: scopePending } = useRoleScope();
 
-  const { status, employee, roleMeta, deptMeta, isExecutive, ownedDepartmentIds } = identity;
-
-  const roleKind: RoleKind = classifyRoleKind({
-    job_title: employee?.job_title ?? null,
-    roleName: roleMeta?.name ?? null,
-    roleLevel: roleMeta?.role_level ?? null,
-    isExecutive,
-  });
-
-  const opsGroupQuery = useGroupDepartmentIds("operations", organizationId);
-  const techGroupQuery = useGroupDepartmentIds("technology", organizationId);
-
-  const dispatchLoading =
-    status === "loading" ||
-    opsGroupQuery.isPending ||
-    techGroupQuery.isPending ||
-    (isExecutive === true && opsGroupQuery.isPending);
+  const dispatchLoading = status === "loading" || scopePending;
 
   useEffect(() => {
     if (roleKind && status === "active" && employee?.id) {
       console.debug("[DashboardRouter] role dispatch", {
         employeeId: employee.id,
         roleKind,
-        ownedDepartmentIds,
+        departmentIds,
       });
     }
-  }, [roleKind, status, employee?.id, ownedDepartmentIds]);
+  }, [roleKind, status, employee?.id, departmentIds]);
 
   if (status === "no-active-employee" || status === "error") {
     return <Navigate to="/sign-in" replace />;
@@ -129,12 +94,7 @@ export default function DashboardRouter() {
     return <DashboardSkeleton />;
   }
 
-  const cooDeptIds = Array.from(
-    new Set([...(opsGroupQuery.data ?? []), ...(ownedDepartmentIds ?? [])]),
-  );
-  const ctoDeptIds = Array.from(
-    new Set([...(techGroupQuery.data ?? []), ...(ownedDepartmentIds ?? [])]),
-  );
+  const executiveScope = { departmentIds, executiveEmployeeId: employee.id };
 
   const scopeForRole = {
     employeeId: employee.id,
@@ -148,22 +108,14 @@ export default function DashboardRouter() {
       case "ceo":
         return <CeoDashboard />;
       case "coo":
-        return (
-          <CooDashboard
-            scope={{ departmentIds: cooDeptIds, executiveEmployeeId: employee.id }}
-          />
-        );
+        return <CooDashboard scope={executiveScope} />;
       case "cto":
-        return (
-          <CtoDashboard
-            scope={{ departmentIds: ctoDeptIds, executiveEmployeeId: employee.id }}
-          />
-        );
+        return <CtoDashboard scope={executiveScope} />;
       case "executive_other":
         return (
           <EmployeeDashboard
             variant="executive_other"
-            scope={{ ...scopeForRole, departmentIds: ownedDepartmentIds }}
+            scope={{ ...scopeForRole, departmentIds }}
           />
         );
       case "department_head":

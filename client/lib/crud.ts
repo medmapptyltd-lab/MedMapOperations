@@ -60,7 +60,8 @@ export function useKpiMutations() {
       });
       if (error) throw error;
     },
-    onSuccess: () => invalidate(["executive-dashboard", "operations-dashboard", "kpis"]),
+    onSuccess: () =>
+      invalidate(["executive-dashboard", "operations-dashboard", "kpis", "kpi-register"]),
   });
 
   const updateTarget = useMutation({
@@ -75,7 +76,8 @@ export function useKpiMutations() {
         .eq("id", id);
       if (error) throw error;
     },
-    onSuccess: () => invalidate(["executive-dashboard", "operations-dashboard", "kpis"]),
+    onSuccess: () =>
+      invalidate(["executive-dashboard", "operations-dashboard", "kpis", "kpi-register"]),
   });
 
   const createResult = useMutation({
@@ -95,14 +97,16 @@ export function useKpiMutations() {
       });
       if (error) throw error;
     },
-    onSuccess: () => invalidate(["executive-dashboard", "operations-dashboard", "kpis"]),
+    onSuccess: () =>
+      invalidate(["executive-dashboard", "operations-dashboard", "kpis", "kpi-register"]),
   });
 
   const updateResult = useMutation({
-    mutationFn: async ({ id, actualValue, status, commentary }: { id: string; actualValue?: number; status?: KpiResultInput["status"]; commentary?: string | null }) => {
+    mutationFn: async ({ id, actualValue, calculatedPercentage, status, commentary }: { id: string; actualValue?: number; calculatedPercentage?: number | null; status?: KpiResultInput["status"]; commentary?: string | null }) => {
       if (!organizationId) throw new Error("Organisation is not available.");
-      const patch: Partial<{ actual_value: number; status: KpiResultInput["status"]; commentary: string | null }> = {};
+      const patch: Partial<{ actual_value: number; calculated_percentage: number | null; status: KpiResultInput["status"]; commentary: string | null }> = {};
       if (actualValue !== undefined) patch.actual_value = actualValue;
+      if (calculatedPercentage !== undefined) patch.calculated_percentage = calculatedPercentage;
       if (status !== undefined) patch.status = status;
       if (commentary !== undefined) patch.commentary = commentary;
       const { error } = await getSupabaseClient()
@@ -111,7 +115,8 @@ export function useKpiMutations() {
         .eq("id", id);
       if (error) throw error;
     },
-    onSuccess: () => invalidate(["executive-dashboard", "operations-dashboard", "kpis"]),
+    onSuccess: () =>
+      invalidate(["executive-dashboard", "operations-dashboard", "kpis", "kpi-register"]),
   });
 
   return { createTarget, updateTarget, createResult, updateResult };

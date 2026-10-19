@@ -18,7 +18,11 @@ import {
 } from "lucide-react";
 import { AppShell } from "@/components/medmap/AppShell";
 import { cn } from "@/lib/utils";
-import { TaskManagementCentre } from "@/pages/Operations";
+import {
+  CaseManagementCentre,
+  TaskManagementCentre,
+  TicketManagementCentre,
+} from "@/pages/Operations";
 import {
   buildOperationsSummary,
   displayEmployeeName,
@@ -712,6 +716,11 @@ export default function CtoDashboard({ scope }: { scope: CtoScope }) {
         <div className="mt-5 grid gap-5 xl:grid-cols-2">
           <TaskManagementCentre scope={techScope} showHeader={true} maxRows={6} />
           <PeopleList scope={techScope} />
+        </div>
+
+        <div className="mt-5 grid gap-5 xl:grid-cols-2">
+          <TicketManagementCentre scope={techScope} showHeader={true} maxRows={8} />
+          <CaseManagementCentre scope={techScope} showHeader={true} maxRows={8} />
         </div>
 
         <footer className="mt-8 flex flex-col justify-between gap-2 border-t border-slate-200/70 pt-5 text-[10px] text-slate-400 sm:flex-row">

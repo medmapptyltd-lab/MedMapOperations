@@ -299,10 +299,10 @@ const scopeColumnsByTable: TableScopeColumnMap = {
   kpi_periods: {},
   kpi_targets: { department: "department_id", employee: "employee_id" },
   kpi_results: { department: "department_id", employee: "employee_id" },
-  revenue: { department: "department_id" },
-  expenses: { department: "department_id" },
+  revenue: {},
+  expenses: {},
   financial_periods: {},
-  company_alerts: { department: "department_id" },
+  company_alerts: {},
 };
 
 function applyScopeToQuery(
@@ -616,6 +616,46 @@ async function fetchKpis(organizationId: string, scope?: DashboardScope): Promis
   };
 }
 
+/**
+ * KPI register data scoped by department. Targets and results do not carry a
+ * department_id of their own, so scoping is driven by the owning KPI's
+ * department and the related target/result rows are fetched by kpi_id.
+ */
+async function fetchKpiRegister(
+  organizationId: string,
+  departmentIds?: string[],
+): Promise<KpiData> {
+  let kpiQuery: any = getSupabaseClient()
+    .from("kpis")
+    .select(columns.kpis)
+    .eq("organization_id", organizationId);
+  if (departmentIds && departmentIds.length) {
+    kpiQuery = kpiQuery.in("department_id", departmentIds);
+  }
+  const { data: kpiRows, error: kpiError } = await kpiQuery;
+  if (kpiError) throw kpiError;
+  const kpis = rawRows(kpiRows).map(parseKpi);
+
+  const periods = (
+    await selectRows("kpi_periods", columns.kpiPeriods, organizationId)
+  ).map(parseKpiPeriod);
+
+  const relationshipFilters = [
+    { column: "kpi_id", values: kpis.map((kpi) => kpi.id) },
+    { column: "period_id", values: periods.map((period) => period.id) },
+  ];
+  const [targetRows, resultRows] = await Promise.all([
+    selectRelatedRows("kpi_targets", columns.kpiTargets, relationshipFilters),
+    selectRelatedRows("kpi_results", columns.kpiResults, relationshipFilters),
+  ]);
+  return {
+    kpis,
+    targets: targetRows.map(parseKpiTarget),
+    results: resultRows.map(parseKpiResult),
+    periods,
+  };
+}
+
 async function fetchFinance(organizationId: string, scope?: DashboardScope): Promise<FinanceData> {
   const [revenue, expenses, periods] = await Promise.all([
     selectRows("revenue", columns.revenue, organizationId, scope),
@@ -695,6 +735,32 @@ export function useExecutiveSummary(dashboardScope?: DashboardScope) {
   const kpis = useExecutiveQuery("kpis", fetchKpis, dashboardScope);
   const finance = useExecutiveQuery("finance", fetchFinance, dashboardScope);
   return { people, operations, kpis, finance };
+}
+
+/**
+ * KPI register query. Pass departmentIds to restrict the register to the KPIs
+ * owned by those departments; omit it for an organisation-wide register. Set
+ * enabled to false while the caller's department scope is still resolving so a
+ * scoped viewer never briefly loads the organisation-wide register.
+ */
+export function useKpiRegister(
+  departmentIds?: string[],
+  options?: { enabled?: boolean },
+) {
+  const { user, loading: authLoading } = useSupabaseAuth();
+  const organizationState = useCurrentOrganisation();
+  const organizationId = organizationState.organizationId;
+  const enabled =
+    Boolean(user && !authLoading && !organizationState.isLoading && organizationId) &&
+    (options?.enabled ?? true);
+  const serialized = departmentIds?.slice().sort().join(",") ?? "";
+
+  return useQuery({
+    queryKey: ["kpi-register", user?.id ?? null, organizationId, serialized],
+    enabled,
+    staleTime: 30_000,
+    queryFn: () => fetchKpiRegister(organizationId!, departmentIds),
+  });
 }
 
 export function normaliseStatus(status: string | null | undefined) {
@@ -792,6 +858,11 @@ export type ExecutiveKpiRow = {
   periodName: string | null;
   ownerEmployeeId: string | null;
   commentary: string | null;
+  targetId: string | null;
+  resultId: string | null;
+  greenThreshold: number | null;
+  yellowThreshold: number | null;
+  criticalThreshold: number | null;
 };
 
 export function buildKpiRows(data: KpiData | undefined, now = new Date()): {
@@ -827,6 +898,11 @@ export function buildKpiRows(data: KpiData | undefined, now = new Date()): {
       periodName: period.period_name,
       ownerEmployeeId: kpi.owner_employee_id,
       commentary: result?.commentary ?? null,
+      targetId: target?.id ?? null,
+      resultId: result?.id ?? null,
+      greenThreshold: target?.green_threshold ?? null,
+      yellowThreshold: target?.yellow_threshold ?? null,
+      criticalThreshold: target?.critical_threshold ?? null,
     };
   });
   return { rows, period };

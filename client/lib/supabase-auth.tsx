@@ -9,6 +9,7 @@ type AuthContextValue = {
   error: AuthError | Error | null;
   signIn: (email: string, password: string) => Promise<{ error: AuthError | null }>;
   signOut: () => Promise<{ error: AuthError | null }>;
+  changePassword: (newPassword: string) => Promise<{ error: AuthError | Error | null }>;
   refreshSession: () => Promise<Session | null>;
 };
 
@@ -80,6 +81,27 @@ export function SupabaseAuthProvider({ children }: { children: React.ReactNode }
     return { error: result.error };
   }, []);
 
+  const changePassword = useCallback(async (newPassword: string) => {
+    if (!supabase) {
+      const configurationError = new Error(
+        "Supabase is not configured. Set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY.",
+      );
+      setError(configurationError);
+      return { error: configurationError as AuthError };
+    }
+
+    const result = await supabase.auth.updateUser({
+      password: newPassword,
+      data: { must_change_password: false },
+    });
+    setError(result.error);
+    if (result.data.user) {
+      const nextUser = result.data.user;
+      setSession((current) => (current ? { ...current, user: nextUser } : current));
+    }
+    return { error: result.error };
+  }, []);
+
   const refreshSession = useCallback(async () => {
     if (!supabase) {
       setLoading(false);
@@ -102,9 +124,10 @@ export function SupabaseAuthProvider({ children }: { children: React.ReactNode }
       error,
       signIn,
       signOut,
+      changePassword,
       refreshSession,
     }),
-    [error, loading, refreshSession, session, signIn, signOut],
+    [changePassword, error, loading, refreshSession, session, signIn, signOut],
   );
 
   return <SupabaseAuthContext.Provider value={value}>{children}</SupabaseAuthContext.Provider>;

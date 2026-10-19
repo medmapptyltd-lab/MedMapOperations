@@ -270,8 +270,8 @@ const operationsScopeColumns: Record<
   departments: {},
   kpis: { department: "department_id", employee: "owner_employee_id" },
   kpi_periods: {},
-  company_alerts: { department: "department_id" },
-  customer_cases: { department: "department_id", employee: "assigned_to_employee_id" },
+  company_alerts: {},
+  customer_cases: { employee: "assigned_to_employee_id" },
   kpi_targets: { department: "department_id", employee: "employee_id" },
   kpi_results: { department: "department_id", employee: "employee_id" },
 };
@@ -613,7 +613,7 @@ export function useOperationsTicketActions() {
         description: input.description,
         category: input.category,
         priority: input.priority,
-        status: "Open",
+        status: "open",
         due_date: input.dueDate,
       });
       if (error) throw error;

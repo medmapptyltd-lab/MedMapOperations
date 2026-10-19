@@ -1,8 +1,9 @@
 import { FormEvent, useMemo, useState } from "react";
-import { BarChart3, Plus, Save, Target } from "lucide-react";
+import { BarChart3, Check, Pencil, Plus, Save, Target, X } from "lucide-react";
 import { AppShell } from "@/components/medmap/AppShell";
 import { IfPermitted } from "@/components/medmap/IfPermitted";
-import { useExecutiveSummary, buildKpiRows, type ExecutiveKpiRow } from "@/lib/executive-dashboard";
+import { useKpiRegister, buildKpiRows, type ExecutiveKpiRow } from "@/lib/executive-dashboard";
+import { useRoleScope } from "@/lib/dashboard-scope";
 import { useKpiMutations, type KpiTargetInput, type KpiResultInput } from "@/lib/crud";
 import { cn } from "@/lib/utils";
 
@@ -79,14 +80,20 @@ function AchievementPill({ achievement }: { achievement: number | null }) {
 const today = () => new Date().toISOString().slice(0, 10);
 
 export default function KPIs() {
-  const { kpis: kpisQuery } = useExecutiveSummary();
-  const { createTarget, createResult } = useKpiMutations();
+  const { isDepartmentScoped, departmentIds, isPending: scopePending } = useRoleScope();
+  const kpisQuery = useKpiRegister(
+    isDepartmentScoped ? departmentIds : undefined,
+    { enabled: !scopePending },
+  );
+  const { createTarget, createResult, updateResult } = useKpiMutations();
 
   const { rows, period } = useMemo(() => buildKpiRows(kpisQuery.data), [kpisQuery.data]);
   const sectionState = getSectionState(kpisQuery.isPending, kpisQuery.isError, kpisQuery.data?.kpis);
 
   const [showAddTarget, setShowAddTarget] = useState(false);
   const [showAddResult, setShowAddResult] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editingValue, setEditingValue] = useState("");
 
   const periods = kpisQuery.data?.periods ?? [];
   const kpis = kpisQuery.data?.kpis ?? [];
@@ -145,6 +152,51 @@ export default function KPIs() {
     });
     setResultForm((current) => ({ ...current, actualValue: 0, commentary: "" }));
     setShowAddResult(false);
+  };
+
+  const startInlineEdit = (row: ExecutiveKpiRow) => {
+    setEditingId(row.id);
+    setEditingValue(row.actual === null ? "" : String(row.actual));
+  };
+
+  const cancelInlineEdit = () => {
+    setEditingId(null);
+    setEditingValue("");
+  };
+
+  const saveInlineResult = (row: ExecutiveKpiRow) => {
+    if (!period) return;
+    const actualValue = Number(editingValue);
+    if (editingValue.trim() === "" || !Number.isFinite(actualValue)) return;
+    const target = row.target ?? 0;
+    const calculatedPercentage =
+      target > 0 ? Math.min(999, (actualValue / target) * 100) : null;
+    const status: KpiResultInput["status"] =
+      calculatedPercentage === null
+        ? "not_started"
+        : calculatedPercentage >= (row.greenThreshold ?? 100)
+          ? "complete"
+          : calculatedPercentage >= (row.yellowThreshold ?? 80)
+            ? "yellow"
+            : "red";
+    if (row.resultId) {
+      void updateResult.mutateAsync({
+        id: row.resultId,
+        actualValue,
+        calculatedPercentage,
+        status,
+      });
+    } else {
+      void createResult.mutateAsync({
+        kpiId: row.id,
+        periodId: period.id,
+        targetId: row.targetId,
+        actualValue,
+        calculatedPercentage,
+        status,
+      });
+    }
+    cancelInlineEdit();
   };
 
   return (
@@ -430,6 +482,7 @@ export default function KPIs() {
                     {period?.period_name
                       ? `Current period: ${period.period_name}`
                       : "No active KPI period configured"}
+                    {isDepartmentScoped ? " · Scoped to your departments" : ""}
                     {" · "}
                     Achievement is actual ÷ target × 100
                   </p>
@@ -497,9 +550,64 @@ export default function KPIs() {
                             </p>
                           </td>
                           <td className="px-3 py-3.5">
-                            <p className="font-display text-[13px] font-bold text-[#152239]">
-                              {formatNumber(row.actual)}
-                            </p>
+                            {editingId === row.id ? (
+                              <div className="flex items-center gap-1.5">
+                                <input
+                                  type="number"
+                                  autoFocus
+                                  value={editingValue}
+                                  onChange={(e) => setEditingValue(e.target.value)}
+                                  onKeyDown={(e) => {
+                                    if (e.key === "Enter") saveInlineResult(row);
+                                    if (e.key === "Escape") cancelInlineEdit();
+                                  }}
+                                  className="w-20 rounded-lg border border-[#c9d7ec] px-2 py-1 text-[12px] font-bold text-[#152239] outline-none focus:border-[#4a87c9]"
+                                />
+                                <button
+                                  type="button"
+                                  onClick={() => saveInlineResult(row)}
+                                  title="Save current number"
+                                  className="grid size-6 place-items-center rounded-md bg-[#e8f8f2] text-[#168465] hover:bg-[#d5f2e7]"
+                                >
+                                  <Check size={13} />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={cancelInlineEdit}
+                                  title="Cancel"
+                                  className="grid size-6 place-items-center rounded-md bg-slate-100 text-slate-500 hover:bg-slate-200"
+                                >
+                                  <X size={13} />
+                                </button>
+                              </div>
+                            ) : (
+                              <div className="flex items-center gap-1.5">
+                                <p className="font-display text-[13px] font-bold text-[#152239]">
+                                  {formatNumber(row.actual)}
+                                </p>
+                                {row.target !== null && (
+                                  <IfPermitted
+                                    roleKinds={[
+                                      "ceo",
+                                      "coo",
+                                      "cto",
+                                      "executive_other",
+                                      "department_head",
+                                      "manager",
+                                    ]}
+                                  >
+                                    <button
+                                      type="button"
+                                      onClick={() => startInlineEdit(row)}
+                                      title="Update current number"
+                                      className="grid size-6 place-items-center rounded-md text-slate-400 hover:bg-slate-100 hover:text-[#4a87c9]"
+                                    >
+                                      <Pencil size={12} />
+                                    </button>
+                                  </IfPermitted>
+                                )}
+                              </div>
+                            )}
                           </td>
                           <td className="px-5 py-3.5 text-right sm:px-6">
                             <AchievementPill achievement={achievement} />
