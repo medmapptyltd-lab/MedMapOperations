@@ -239,9 +239,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             className="flex items-center gap-3"
             onClick={() => setMobileOpen(false)}
           >
-            <span className="grid size-10 place-items-center rounded-[13px] bg-[#84e0c3] text-[#102339] shadow-[0_0_0_5px_rgba(132,224,195,0.1)]">
-              <Stethoscope size={21} strokeWidth={2.4} />
-            </span>
+            <img
+              src="/medmap-logo.png"
+              alt="MedMap"
+              className="h-10 w-auto rounded-[10px] shadow-[0_0_0_5px_rgba(132,224,195,0.1)]"
+            />
             <span>
               <span className="block font-display text-[18px] font-bold tracking-[-0.04em]">
                 MedMap
