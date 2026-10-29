@@ -14,17 +14,14 @@ import {
   LayoutDashboard,
   LifeBuoy,
   Menu,
-  Network,
   Search,
   Settings2,
   ShieldCheck,
   Stethoscope,
   Users,
   X,
-  Zap,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { SupabaseConnectionDiagnostic } from "@/components/medmap/SupabaseConnectionDiagnostic";
 import { useCurrentEmployee } from "@/lib/supabase-identity";
 import { useSupabaseAuth } from "@/lib/supabase-auth";
 import {
@@ -47,12 +44,6 @@ type NavItem = {
 
 const navItems: NavItem[] = [
   { label: "Command centre", section: "overview", icon: LayoutDashboard },
-  {
-    label: "Organisation",
-    section: "organization",
-    icon: Network,
-    path: "/organization",
-  },
   { label: "Company KPIs", section: "kpis", icon: BarChart3, path: "/kpis" },
   {
     label: "Operations",
@@ -101,29 +92,6 @@ const navItems: NavItem[] = [
     section: "finance",
     icon: Gauge,
     path: "/finance",
-    roles: ["ceo", "executive_other"],
-  },
-  {
-    label: "Technology",
-    section: "technology",
-    icon: Zap,
-    path: "/technology",
-    roles: ["ceo", "cto", "executive_other"],
-  },
-  {
-    label: "Risk & governance",
-    section: "governance",
-    icon: ShieldCheck,
-    path: "/risk",
-    roles: ["ceo", "executive_other", "cto", "coo"],
-  },
-  { label: "Reports", section: "reports", icon: FileText, path: "/reports",
-    roles: ["ceo", "executive_other", "coo", "cto", "department_head", "manager"] },
-  {
-    label: "Administration",
-    section: "admin",
-    icon: Settings2,
-    path: "/admin",
     roles: ["ceo", "executive_other"],
   },
 ];
@@ -181,9 +149,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             ? "Meetings & deadlines"
             : location.pathname === "/kpis"
               ? "Company KPIs"
-              : location.pathname === "/organization"
-                ? "Organisation"
-                : location.pathname === "/doctor-acquisition"
+              : location.pathname === "/doctor-acquisition"
                   ? "Doctor Acquisition"
                   : location.pathname === "/ambassadors"
                     ? "Ambassador Programme"
@@ -197,15 +163,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                             ? "Engineering"
                             : location.pathname === "/security"
                               ? "Security"
-                              : location.pathname === "/technology"
-                          ? "Technology"
-                          : location.pathname === "/risk"
-                            ? "Risk & governance"
-                            : location.pathname === "/reports"
-                              ? "Reports"
-                              : location.pathname === "/admin"
-                                ? "Administration"
-                                : "Command centre";
+                              : "Command centre";
 
   const jumpToSection = (section: string) => {
     setMobileOpen(false);
@@ -446,7 +404,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         </header>
         <main>
           {children}
-          {location.pathname === "/admin" && <SupabaseConnectionDiagnostic />}
         </main>
       </div>
     </div>

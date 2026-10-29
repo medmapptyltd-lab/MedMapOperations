@@ -719,9 +719,9 @@ async function fetchAmbassadorDashboard(
     reviewResult,
     bookingResult,
   ] = await Promise.allSettled([
-    selectRows("ambassadors", columns.ambassadors, organizationId),
+    selectRows("ambassadors", columns.ambassadors),
     selectRows("ambassador_cohorts", columns.cohorts),
-    selectRows("ambassador_referrals", columns.referrals, organizationId),
+    selectRows("ambassador_referrals", columns.referrals),
     selectRows("doctors", columns.doctors, organizationId),
     selectRows("ambassador_activities", columns.activities, organizationId),
     selectRows("ambassador_tiers", columns.tiers),
@@ -730,7 +730,7 @@ async function fetchAmbassadorDashboard(
       columns.commissionPeriods,
       organizationId,
     ),
-    selectRows("ambassador_commissions", columns.commissions, organizationId),
+    selectRows("ambassador_commissions", columns.commissions),
     selectRows("ambassador_performance", columns.performance, organizationId),
     selectRows(
       "ambassador_performance_periods",
@@ -738,7 +738,7 @@ async function fetchAmbassadorDashboard(
       organizationId,
     ),
     selectRows("ambassador_probation_reviews", columns.probationReviews, organizationId),
-    selectRows("bookings", columns.bookings, organizationId),
+    selectRows("bookings", columns.bookings),
   ]);
 
   const ambassadors = requiredSettled(ambassadorResult, parseAmbassador, "ambassador");

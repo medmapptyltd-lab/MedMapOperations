@@ -15,7 +15,7 @@ import {
 import { AppShell } from "@/components/medmap/AppShell";
 import { IfPermitted } from "@/components/medmap/IfPermitted";
 import { useOperationsDashboard } from "@/lib/operations-dashboard";
-import { useExecutiveSummary, findCurrentKpiPeriod, normaliseStatus, isResolvedStatus } from "@/lib/executive-dashboard";
+import { normaliseStatus, isResolvedStatus } from "@/lib/executive-dashboard";
 import {
   useMeetingsMutations,
   useDeadlinesMutations,
@@ -170,11 +170,6 @@ function formatDate(value: string) {
   }
 }
 
-function formatNumber(value: number | null | undefined) {
-  if (value === null || value === undefined || !Number.isFinite(value)) return "—";
-  return value.toLocaleString("en-ZA", { maximumFractionDigits: 2 });
-}
-
 const today = () => new Date().toISOString().slice(0, 10);
 
 const emptyMeeting: MeetingInput = {
@@ -191,7 +186,6 @@ const emptyMeeting: MeetingInput = {
 export default function Meetings() {
   const meetingsQuery = useMeetingsQuery();
   const operationsQuery = useOperationsDashboard();
-  const { kpis: kpisQuery } = useExecutiveSummary();
   const { createMeeting, updateMeeting, deleteMeeting } = useMeetingsMutations();
   const { createDeadline, updateDeadline, deleteDeadline } = useDeadlinesMutations();
 
@@ -200,16 +194,6 @@ export default function Meetings() {
   const employees = operationsQuery.data?.employees ?? [];
   const departments = operationsQuery.data?.departments ?? [];
 
-  const kpis = kpisQuery.data?.kpis ?? [];
-  const kpiPeriods = kpisQuery.data?.periods ?? [];
-  const kpiTargets = kpisQuery.data?.targets ?? [];
-  const kpiResults = kpisQuery.data?.results ?? [];
-
-  const currentKpiPeriod = useMemo(
-    () => findCurrentKpiPeriod(kpiPeriods),
-    [kpiPeriods],
-  );
-
   const openDeadlines = useMemo(
     () =>
       deadlines
@@ -217,58 +201,6 @@ export default function Meetings() {
         .sort((a, b) => a.due_at.localeCompare(b.due_at)),
     [deadlines],
   );
-
-  const departmentTargetRows = useMemo(() => {
-    if (!currentKpiPeriod) return [];
-    const employeeName = (id: string | null) => {
-      if (!id) return "Unassigned";
-      const employee = employees.find((candidate) => candidate.id === id);
-      return employee
-        ? `${employee.first_name} ${employee.last_name}`.trim()
-        : "Unassigned";
-    };
-    const departmentName = (id: string | null) => {
-      if (!id) return "Unassigned";
-      return departments.find((candidate) => candidate.id === id)?.name ?? "Unassigned";
-    };
-    return kpis
-      .filter((kpi) => kpi.active)
-      .map((kpi) => {
-        const target = kpiTargets.find(
-          (candidate) =>
-            candidate.kpi_id === kpi.id && candidate.period_id === currentKpiPeriod.id,
-        );
-        const result = kpiResults.find(
-          (candidate) =>
-            candidate.period_id === currentKpiPeriod.id &&
-            (candidate.target_id === target?.id ||
-              (!target && candidate.kpi_id === kpi.id)),
-        );
-        const achievement =
-          target?.target_value && target.target_value > 0 && result?.actual_value !== null
-            ? ((result?.actual_value ?? 0) / target.target_value) * 100
-            : null;
-        const status = (() => {
-          if (achievement === null || !Number.isFinite(achievement)) return "Not set";
-          if (achievement >= 100) return "On track";
-          if (achievement >= 80) return "At risk";
-          return "Outstanding";
-        })();
-        return {
-          id: `${kpi.id}-${currentKpiPeriod.id}`,
-          kpiId: kpi.id,
-          kpiName: kpi.name,
-          department: departmentName(kpi.department_id),
-          owner: employeeName(kpi.owner_employee_id),
-          target: target?.target_value ?? null,
-          actual: result?.actual_value ?? null,
-          achievement,
-          status,
-          unit: kpi.unit,
-          periodName: currentKpiPeriod.period_name,
-        };
-      });
-  }, [kpis, currentKpiPeriod, kpiTargets, kpiResults, employees, departments]);
 
   const meetingsState = getSectionState(
     meetingsQuery.isPending,
@@ -279,11 +211,6 @@ export default function Meetings() {
     operationsQuery.isPending,
     operationsQuery.isError,
     deadlines,
-  );
-  const targetsState = getSectionState(
-    kpisQuery.isPending,
-    kpisQuery.isError,
-    departmentTargetRows,
   );
 
   const [meetingForm, setMeetingForm] = useState<MeetingInput>(emptyMeeting);
@@ -348,8 +275,8 @@ export default function Meetings() {
               Turn meetings into owned outcomes.
             </h1>
             <p className="mt-2 max-w-[720px] text-[13px] leading-6 text-slate-500">
-              Record the conversation, track department KPI targets from the live period, and keep
-              every resulting deadline visible until it has an accountable owner.
+              Record the conversation and keep every deadline that comes out of it visible until it
+              has an accountable owner.
             </p>
           </div>
           <IfPermitted
@@ -364,7 +291,7 @@ export default function Meetings() {
           </IfPermitted>
         </div>
 
-        <section className="mt-7 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <section className="mt-7 grid gap-3 sm:grid-cols-3">
           <SummaryCard
             label="Meeting records"
             value={String(meetings.length)}
@@ -378,164 +305,11 @@ export default function Meetings() {
             icon={ClipboardCheck}
           />
           <SummaryCard
-            label="Active KPI targets"
-            value={String(departmentTargetRows.filter((row) => row.target !== null).length)}
-            detail={currentKpiPeriod?.period_name ?? "No active period"}
-            icon={Target}
-          />
-          <SummaryCard
             label="Team members"
             value={String(employees.filter((e) => normaliseStatus(e.employee_status) === "active").length)}
             detail="Active employees"
             icon={CheckCircle2}
           />
-        </section>
-
-        <section className="mt-5 rounded-2xl border border-[#ddd6f5] bg-[#fbfaff] p-5 shadow-[0_5px_20px_rgba(21,36,58,0.035)] sm:p-6">
-          <div className="flex flex-col justify-between gap-4 lg:flex-row lg:items-center">
-            <div>
-              <div className="flex items-center gap-2">
-                <span className="grid size-8 place-items-center rounded-lg bg-[#eee8ff] text-[#755bc0]">
-                  <Target size={16} />
-                </span>
-                <h2 className="font-display text-[16px] font-bold text-[#152239]">
-                  Department targets
-                </h2>
-              </div>
-              <p className="mt-2 text-[11px] text-slate-500">
-                {currentKpiPeriod
-                  ? `Live period: ${currentKpiPeriod.period_name}. Achievement is actual ÷ target × 100.`
-                  : "No active KPI period configured."}
-              </p>
-            </div>
-            <span className="rounded-full bg-[#f1edff] px-2.5 py-1 text-[10px] font-bold text-[#755bc0]">
-              {departmentTargetRows.length} KPI{departmentTargetRows.length === 1 ? "" : "s"}
-            </span>
-          </div>
-          {targetsState === "loading" && <SectionLoading label="department targets" />}
-          {targetsState === "error" && (
-            <SectionError label="department targets" message={kpisQuery.error?.message} />
-          )}
-          {targetsState === "empty" && (
-            <SectionEmpty
-              label="department targets"
-              hint="Seed the kpis and kpi_targets tables to surface the company target roll-up here."
-            />
-          )}
-          {targetsState === "ready" && (
-            <>
-              <div className="mt-5 grid gap-3 sm:grid-cols-3">
-                {kpis.slice(0, 3).map((kpi) => {
-                  const row = departmentTargetRows.find((candidate) => candidate.kpiId === kpi.id);
-                  return (
-                    <div
-                      key={kpi.id}
-                      className="rounded-xl border border-[#e2ddf7] bg-white p-4"
-                    >
-                      <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-slate-400">
-                        {row?.periodName ?? "Current period"}
-                      </p>
-                      <p className="mt-2 text-[12px] font-bold text-slate-700">{kpi.name}</p>
-                      <div className="mt-3 flex items-end justify-between gap-3">
-                        <div>
-                          <p className="font-display text-[23px] font-bold text-[#152239]">
-                            {formatNumber(row?.actual)}
-                          </p>
-                          <p className="text-[10px] text-slate-400">
-                            actual {row?.unit ?? ""}
-                          </p>
-                        </div>
-                        <div className="text-right">
-                          <p className="font-display text-[23px] font-bold text-[#755bc0]">
-                            {formatNumber(row?.target)}
-                          </p>
-                          <p className="text-[10px] text-slate-400">target</p>
-                        </div>
-                      </div>
-                      <p className="mt-3 text-[10px] text-slate-400">
-                        {row?.department} · {row?.owner}
-                      </p>
-                    </div>
-                  );
-                })}
-              </div>
-              <div className="mt-5 overflow-x-auto">
-                <table className="w-full min-w-[780px] text-left">
-                  <thead>
-                    <tr className="border-b border-[#e2ddf7] text-[10px] uppercase tracking-[0.12em] text-slate-400">
-                      <th className="px-3 py-3 font-bold">Department</th>
-                      <th className="px-3 py-3 font-bold">KPI</th>
-                      <th className="px-3 py-3 font-bold">Target</th>
-                      <th className="px-3 py-3 font-bold">Actual</th>
-                      <th className="px-3 py-3 font-bold">Achievement</th>
-                      <th className="px-3 py-3 font-bold">Owner</th>
-                      <th className="px-3 py-3 font-bold">Status</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {departmentTargetRows.map((row) => (
-                      <tr
-                        key={row.id}
-                        className="border-b border-[#eeeaf9] text-[11px] last:border-0"
-                      >
-                        <td className="px-3 py-3 font-semibold text-slate-600">
-                          {row.department}
-                        </td>
-                        <td className="px-3 py-3 text-slate-500">{row.kpiName}</td>
-                        <td className="px-3 py-3 font-display font-bold text-[#755bc0]">
-                          {formatNumber(row.target)}
-                        </td>
-                        <td className="px-3 py-3 font-display font-bold text-[#152239]">
-                          {formatNumber(row.actual)}
-                        </td>
-                        <td className="px-3 py-3">
-                          <span
-                            className={cn(
-                              "rounded-full px-2 py-1 text-[9px] font-bold",
-                              row.achievement === null &&
-                                "bg-slate-100 text-slate-500",
-                              row.achievement !== null &&
-                                row.achievement >= 100 &&
-                                "bg-[#e8f8f2] text-[#168465]",
-                              row.achievement !== null &&
-                                row.achievement >= 80 &&
-                                row.achievement < 100 &&
-                                "bg-[#fff2d9] text-[#9a6419]",
-                              row.achievement !== null &&
-                                row.achievement < 80 &&
-                                "bg-[#ffe5e3] text-[#bd504d]",
-                            )}
-                          >
-                            {row.achievement === null
-                              ? "—"
-                              : `${row.achievement.toFixed(1)}%`}
-                          </span>
-                        </td>
-                        <td className="px-3 py-3 text-slate-500">{row.owner}</td>
-                        <td className="px-3 py-3">
-                          <span
-                            className={cn(
-                              "rounded-full px-2 py-1 text-[9px] font-bold",
-                              row.status === "On track" &&
-                                "bg-[#e8f8f2] text-[#168465]",
-                              row.status === "At risk" &&
-                                "bg-[#fff2d9] text-[#9a6419]",
-                              row.status === "Outstanding" &&
-                                "bg-[#ffe5e3] text-[#bd504d]",
-                              row.status === "Not set" &&
-                                "bg-slate-100 text-slate-500",
-                            )}
-                          >
-                            {row.status}
-                          </span>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </>
-          )}
         </section>
 
         <section

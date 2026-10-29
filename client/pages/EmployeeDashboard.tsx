@@ -6,7 +6,6 @@ import {
   CheckSquare,
   ChevronRight,
   ClipboardList,
-  Clock3,
   Crown,
   FolderKanban,
   HardHat,
@@ -14,10 +13,17 @@ import {
   UsersRound,
 } from "lucide-react";
 import { AppShell } from "@/components/medmap/AppShell";
+import {
+  Metric,
+  SectionHeader,
+  StateMessage,
+  formatLiveDate,
+  priorityClass,
+  statusClass,
+} from "@/components/medmap/dashboard-ui";
 import { cn } from "@/lib/utils";
 import {
   buildOperationsSummary,
-  displayEmployeeName,
   isTaskActive,
   isTaskOverdue,
   useOperationsDashboard,
@@ -47,166 +53,6 @@ type EmployeeScope = {
   teamId?: string;
   managerId?: string;
 };
-
-type Tone = "mint" | "red" | "amber" | "navy";
-
-type MetricProps = {
-  label: string;
-  value: string;
-  detail: string;
-  tone: Tone;
-  icon: React.ElementType;
-};
-
-function formatLiveDate(value: string | null) {
-  if (!value) return "Date not provided";
-  const date = new Date(value.includes("T") ? value : `${value}T12:00:00`);
-  return Number.isNaN(date.valueOf())
-    ? value
-    : new Intl.DateTimeFormat("en-ZA", {
-        day: "2-digit",
-        month: "short",
-        year: "numeric",
-      }).format(date);
-}
-
-function priorityClass(priority: string) {
-  const value = priority.trim().toLowerCase();
-  if (["critical", "urgent"].includes(value)) return "bg-[#ffe5e3] text-[#bd504d]";
-  if (["high"].includes(value)) return "bg-[#fff2d9] text-[#9a6419]";
-  if (["normal", "medium"].includes(value)) return "bg-[#eaf3ff] text-[#4a87c9]";
-  return "bg-slate-100 text-slate-500";
-}
-
-function statusClass(status: string) {
-  const value = status.trim().toLowerCase();
-  if (isResolvedStatus(status)) return "bg-[#e8f8f2] text-[#168465]";
-  if (["critical", "blocked", "failed", "overdue", "cancelled", "closed"].includes(value))
-    return "bg-[#ffe5e3] text-[#bd504d]";
-  if (["pending", "pending_customer", "pending_internal", "at risk", "warning"].includes(value))
-    return "bg-[#fff2d9] text-[#9a6419]";
-  if (["assigned", "in progress", "started", "in_progress", "escalated", "open"].includes(value))
-    return "bg-[#f1edff] text-[#755bc0]";
-  return "bg-slate-100 text-slate-500";
-}
-
-function Metric({ label, value, detail, tone, icon: Icon }: MetricProps) {
-  return (
-    <div className="rounded-2xl border border-slate-200/80 bg-white p-4 shadow-[0_5px_20px_rgba(21,36,58,0.035)]">
-      <div className="flex items-start justify-between">
-        <span
-          className={cn(
-            "grid size-9 place-items-center rounded-xl",
-            tone === "mint" && "bg-[#e8f8f2] text-[#1b9975]",
-            tone === "red" && "bg-[#ffe9e6] text-[#bf5b56]",
-            tone === "amber" && "bg-[#fff2d9] text-[#b3781f]",
-            tone === "navy" && "bg-[#eaf0f8] text-[#2f527a]",
-          )}
-        >
-          <Icon size={17} />
-        </span>
-        <span
-          className={cn(
-            "size-1.5 rounded-full",
-            tone === "mint"
-              ? "bg-[#36ac87]"
-              : tone === "red"
-                ? "bg-[#da6560]"
-                : tone === "amber"
-                  ? "bg-[#e0a03a]"
-                  : "bg-[#4a87c9]",
-          )}
-        />
-      </div>
-      <p className="mt-4 text-[11px] font-medium text-slate-500">{label}</p>
-      <p
-        className={cn(
-          "mt-1 font-display text-[26px] font-bold tracking-[-0.06em]",
-          tone === "red" ? "text-[#c1514d]" : "text-[#152239]",
-        )}
-      >
-        {value}
-      </p>
-      <p className="mt-1 text-[10px] text-slate-400">{detail}</p>
-    </div>
-  );
-}
-
-function StateMessage({
-  children,
-  tone = "empty",
-  onRetry,
-}: {
-  children: React.ReactNode;
-  tone?: "empty" | "error";
-  onRetry?: () => void;
-}) {
-  return (
-    <div
-      className={cn(
-        "rounded-xl p-3 text-[11px] leading-5",
-        tone === "error"
-          ? "border border-[#f0cdca] bg-[#fff8f7] text-[#a34f4b]"
-          : "bg-[#f7f9fb] text-slate-400",
-      )}
-    >
-      <p>{children}</p>
-      {onRetry && (
-        <button
-          onClick={onRetry}
-          className="mt-2 rounded-lg bg-[#bd504d] px-3 py-1.5 text-[10px] font-bold text-white hover:bg-[#a34f4b]"
-        >
-          Retry
-        </button>
-      )}
-    </div>
-  );
-}
-
-function SectionHeader({
-  icon: Icon,
-  title,
-  description,
-  pillText,
-  pillTone = "mint",
-  iconBg = "bg-[#eaf3ff]",
-  iconColor = "text-[#4a87c9]",
-}: {
-  icon: React.ElementType;
-  title: string;
-  description: string;
-  pillText?: string;
-  pillTone?: "mint" | "amber" | "red" | "navy";
-  iconBg?: string;
-  iconColor?: string;
-}) {
-  return (
-    <div className="flex items-start justify-between gap-3 sm:items-center">
-      <div>
-        <div className="flex items-center gap-2">
-          <span className={cn("grid size-8 place-items-center rounded-lg", iconBg, iconColor)}>
-            <Icon size={16} />
-          </span>
-          <h2 className="font-display text-[15px] font-bold text-[#152239]">{title}</h2>
-        </div>
-        <p className="mt-2 text-[11px] text-slate-400">{description}</p>
-      </div>
-      {pillText ? (
-        <span
-          className={cn(
-            "rounded-full px-2.5 py-1 text-[10px] font-bold shrink-0",
-            pillTone === "mint" && "bg-[#e8f8f2] text-[#168465]",
-            pillTone === "amber" && "bg-[#fff2d9] text-[#9a6419]",
-            pillTone === "red" && "bg-[#ffe5e3] text-[#bd504d]",
-            pillTone === "navy" && "bg-[#eaf0f8] text-[#2f527a]",
-          )}
-        >
-          {pillText}
-        </span>
-      ) : null}
-    </div>
-  );
-}
 
 function variantHeader(variant: EmployeeVariant) {
   switch (variant) {
@@ -370,6 +216,8 @@ function MyTasks({
         description="Tasks assigned to you with inline status, progress and ownership updates."
         pillText={`${active.length} active`}
         pillTone={active.some((t) => isTaskOverdue(t)) ? "red" : "mint"}
+        iconBg="bg-[#eaf3ff]"
+        iconColor="text-[#4a87c9]"
       />
       <div className="mt-4 space-y-2">
         {!active.length && <StateMessage>You have no active tasks assigned.</StateMessage>}

@@ -1,3 +1,4 @@
+import { useState } from "react";
 import {
   Activity,
   AlertTriangle,
@@ -9,21 +10,27 @@ import {
   Mail,
   MapPin,
   Phone,
+  Plus,
+  Send,
   Stethoscope,
   Target,
   Ticket,
   Users,
 } from "lucide-react";
 import { AppShell } from "@/components/medmap/AppShell";
+import { IfPermitted } from "@/components/medmap/IfPermitted";
+import { useDoctorPipelineMutations } from "@/lib/crud";
 import {
   buildAcquisitionKpiInformation,
   buildAcquisitionOperationalSummary,
   buildAcquisitionTimeline,
   buildDoctorAcquisitionMetrics,
+  displayAmbassadorName,
   displayDoctorName,
   displayEmployeeName,
   sortRecentAcquisitions,
   useDoctorAcquisitionDashboard,
+  type AcquisitionAmbassador,
   type AcquisitionBreakdown,
   type AcquisitionChannelSummary,
   type AcquisitionKpiInformation,
@@ -32,6 +39,53 @@ import {
   type DoctorAcquisitionRecord,
 } from "@/lib/doctor-acquisition-dashboard";
 import { cn } from "@/lib/utils";
+
+const PIPELINE_WRITE_ROLES = [
+  "ceo",
+  "coo",
+  "cto",
+  "executive_other",
+  "department_head",
+  "manager",
+] as const;
+
+const PIPELINE_STATUS_OPTIONS = [
+  "prospect",
+  "contacted",
+  "interested",
+  "enrolled",
+  "converted",
+  "lost",
+] as const;
+
+const CONTACT_CHANNEL_OPTIONS = [
+  "email",
+  "phone",
+  "whatsapp",
+  "sms",
+  "linkedin",
+  "in_person",
+  "other",
+] as const;
+
+const CONTACT_OUTCOME_OPTIONS = [
+  "attempted",
+  "connected",
+  "no_answer",
+  "callback_requested",
+  "interested",
+  "not_interested",
+  "enrolled",
+  "wrong_contact",
+  "other",
+] as const;
+
+function humaniseOption(value: string) {
+  return value
+    .split("_")
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
 
 function formatLiveDate(value: string | null) {
   if (!value) return "Date not provided";
@@ -393,6 +447,316 @@ function KpiRow({ information }: { information: AcquisitionKpiInformation }) {
   );
 }
 
+const inputClass =
+  "w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-[11px] text-slate-700 outline-none focus:border-[#755bc0]";
+
+function AddDoctorForm() {
+  const { createPipelineEntry } = useDoctorPipelineMutations();
+  const [open, setOpen] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const empty = {
+    firstName: "",
+    lastName: "",
+    email: "",
+    phone: "",
+    specialty: "",
+    practiceName: "",
+    city: "",
+    acquisitionChannel: "email",
+    notes: "",
+  };
+  const [form, setForm] = useState(empty);
+
+  const update =
+    (key: keyof typeof empty) =>
+    (event: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) =>
+      setForm((prev) => ({ ...prev, [key]: event.target.value }));
+
+  const submit = (event: React.FormEvent) => {
+    event.preventDefault();
+    setError(null);
+    if (!form.firstName.trim() || !form.lastName.trim()) {
+      setError("First and last name are required.");
+      return;
+    }
+    void createPipelineEntry
+      .mutateAsync({
+        firstName: form.firstName.trim(),
+        lastName: form.lastName.trim(),
+        email: form.email.trim() || null,
+        phone: form.phone.trim() || null,
+        specialty: form.specialty.trim() || null,
+        practiceName: form.practiceName.trim() || null,
+        city: form.city.trim() || null,
+        acquisitionChannel: form.acquisitionChannel || null,
+        notes: form.notes.trim() || null,
+      })
+      .then(() => {
+        setForm(empty);
+        setOpen(false);
+      })
+      .catch((submitError: unknown) => {
+        setError(submitError instanceof Error ? submitError.message : "The doctor could not be added.");
+      });
+  };
+
+  return (
+    <div className="rounded-xl border border-slate-200/80 p-3">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <p className="text-[11px] font-bold text-slate-700">Add a doctor to the pipeline</p>
+          <p className="mt-1 text-[10px] text-slate-400">
+            New entries start in the prospect state so the team can work them through to enrolment.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => setOpen((value) => !value)}
+          className="inline-flex shrink-0 items-center gap-1 rounded-lg bg-[#f1edff] px-3 py-2 text-[10px] font-bold text-[#755bc0] hover:bg-[#e8e1ff]"
+        >
+          <Plus size={12} /> {open ? "Close" : "Add doctor"}
+        </button>
+      </div>
+
+      {open && (
+        <form onSubmit={submit} className="mt-3 grid gap-2 sm:grid-cols-2">
+          <input className={inputClass} placeholder="First name" value={form.firstName} onChange={update("firstName")} />
+          <input className={inputClass} placeholder="Last name" value={form.lastName} onChange={update("lastName")} />
+          <input className={inputClass} placeholder="Email" value={form.email} onChange={update("email")} />
+          <input className={inputClass} placeholder="Phone" value={form.phone} onChange={update("phone")} />
+          <input className={inputClass} placeholder="Specialty" value={form.specialty} onChange={update("specialty")} />
+          <input className={inputClass} placeholder="Practice name" value={form.practiceName} onChange={update("practiceName")} />
+          <input className={inputClass} placeholder="City" value={form.city} onChange={update("city")} />
+          <select className={inputClass} value={form.acquisitionChannel} onChange={update("acquisitionChannel")}>
+            {CONTACT_CHANNEL_OPTIONS.map((channel) => (
+              <option key={channel} value={channel}>
+                {humaniseOption(channel)}
+              </option>
+            ))}
+          </select>
+          <textarea
+            className={cn(inputClass, "sm:col-span-2")}
+            rows={2}
+            placeholder="Notes"
+            value={form.notes}
+            onChange={update("notes")}
+          />
+          {error && <p className="text-[10px] text-[#bd504d] sm:col-span-2">{error}</p>}
+          <div className="sm:col-span-2">
+            <button
+              type="submit"
+              disabled={createPipelineEntry.isPending}
+              className="inline-flex items-center gap-1 rounded-lg bg-[#755bc0] px-4 py-2 text-[10px] font-bold text-white hover:bg-[#674fb0] disabled:opacity-60"
+            >
+              <Plus size={12} /> {createPipelineEntry.isPending ? "Saving..." : "Save prospect"}
+            </button>
+          </div>
+        </form>
+      )}
+    </div>
+  );
+}
+
+function PipelineRow({
+  record,
+  ambassadors,
+}: {
+  record: DoctorAcquisitionRecord;
+  ambassadors: AcquisitionAmbassador[];
+}) {
+  const { updateAcquisitionStatus, logContactAttempt, assignAmbassador } = useDoctorPipelineMutations();
+  const doctor = record.doctor;
+  const [logging, setLogging] = useState(false);
+  const [channel, setChannel] = useState<string>(CONTACT_CHANNEL_OPTIONS[0]);
+  const [outcome, setOutcome] = useState<string>(CONTACT_OUTCOME_OPTIONS[0]);
+  const [note, setNote] = useState("");
+  const [error, setError] = useState<string | null>(null);
+
+  const changeStatus = (status: string) => {
+    setError(null);
+    void updateAcquisitionStatus
+      .mutateAsync({ id: record.id, doctorId: record.doctor_id, status })
+      .catch((changeError: unknown) => {
+        setError(changeError instanceof Error ? changeError.message : "Status could not be updated.");
+      });
+  };
+
+  const changeAmbassador = (ambassadorId: string) => {
+    if (!ambassadorId) return;
+    setError(null);
+    void assignAmbassador
+      .mutateAsync({ doctorId: record.doctor_id, ambassadorId })
+      .catch((changeError: unknown) => {
+        setError(changeError instanceof Error ? changeError.message : "Ambassador could not be assigned.");
+      });
+  };
+
+  const submitLog = () => {
+    setError(null);
+    void logContactAttempt
+      .mutateAsync({ doctorId: record.doctor_id, channel, outcome, notes: note.trim() || null })
+      .then(() => {
+        setLogging(false);
+        setNote("");
+        setOutcome(CONTACT_OUTCOME_OPTIONS[0]);
+      })
+      .catch((logError: unknown) => {
+        setError(logError instanceof Error ? logError.message : "The contact attempt could not be logged.");
+      });
+  };
+
+  return (
+    <>
+      <tr className="border-t border-slate-100 align-top">
+        <td className="py-3 pr-4">
+          <p className="font-bold text-slate-700">{displayDoctorName(doctor)}</p>
+          <p className="mt-1 text-slate-400">{doctor?.practice_name || doctor?.specialty || "Practice details unavailable"}</p>
+          <div className="mt-2 flex flex-wrap gap-2 text-[9px] text-slate-400">
+            {doctor?.email && <span className="inline-flex items-center gap-1"><Mail size={11} />{doctor.email}</span>}
+            {doctor?.phone && <span className="inline-flex items-center gap-1"><Phone size={11} />{doctor.phone}</span>}
+          </div>
+        </td>
+        <td className="py-3 pr-4">
+          <select
+            value={record.status}
+            onChange={(event) => changeStatus(event.target.value)}
+            className="rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-[10px] text-slate-600 outline-none focus:border-[#755bc0]"
+          >
+            {PIPELINE_STATUS_OPTIONS.map((status) => (
+              <option key={status} value={status}>{humaniseOption(status)}</option>
+            ))}
+          </select>
+          <p className="mt-2 text-[9px] text-slate-400">Source: {record.acquisition_channel ? humaniseOption(record.acquisition_channel) : "Unspecified"}</p>
+        </td>
+        <td className="py-3 pr-4">
+          <select
+            value={record.ambassador?.id ?? ""}
+            onChange={(event) => changeAmbassador(event.target.value)}
+            className="rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-[10px] text-slate-600 outline-none focus:border-[#755bc0]"
+          >
+            <option value="">Unassigned</option>
+            {ambassadors.map((ambassador) => (
+              <option key={ambassador.id} value={ambassador.id}>{displayAmbassadorName(ambassador)}</option>
+            ))}
+          </select>
+          <p className="mt-2 text-[9px] text-slate-400">{record.ambassador ? "Ambassador assigned" : "No ambassador assigned"}</p>
+        </td>
+        <td className="py-3 pr-4 text-slate-500">
+          <p className="font-semibold text-slate-600">{record.contactCount} contact{record.contactCount === 1 ? "" : "s"}</p>
+          <p className="mt-1 text-[9px] text-slate-400">{record.lastContactAt ? formatLiveDate(record.lastContactAt) : "No contact logged"}</p>
+          {record.lastContactNote && <p className="mt-1 line-clamp-2 text-[9px] text-slate-400">{record.lastContactNote}</p>}
+        </td>
+        <td className="py-3">
+          <button
+            type="button"
+            onClick={() => setLogging((value) => !value)}
+            className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-2.5 py-1.5 text-[10px] font-bold text-slate-600 hover:border-[#bfe9da] hover:bg-[#f2fcf8]"
+          >
+            <Send size={11} /> Log contact
+          </button>
+        </td>
+      </tr>
+      {logging && (
+        <tr className="border-t border-slate-100 bg-[#f9fbfd]">
+          <td colSpan={5} className="px-3 py-3">
+            <div className="grid gap-2 sm:grid-cols-4">
+              <select className={inputClass} value={channel} onChange={(event) => setChannel(event.target.value)}>
+                {CONTACT_CHANNEL_OPTIONS.map((option) => (
+                  <option key={option} value={option}>{humaniseOption(option)}</option>
+                ))}
+              </select>
+              <select className={inputClass} value={outcome} onChange={(event) => setOutcome(event.target.value)}>
+                {CONTACT_OUTCOME_OPTIONS.map((option) => (
+                  <option key={option} value={option}>{humaniseOption(option)}</option>
+                ))}
+              </select>
+              <input className={cn(inputClass, "sm:col-span-2")} placeholder="What happened? e.g. sent intro email" value={note} onChange={(event) => setNote(event.target.value)} />
+            </div>
+            {error && <p className="mt-2 text-[10px] text-[#bd504d]">{error}</p>}
+            <div className="mt-2 flex gap-2">
+              <button
+                type="button"
+                onClick={submitLog}
+                disabled={logContactAttempt.isPending}
+                className="inline-flex items-center gap-1 rounded-lg bg-[#755bc0] px-3 py-1.5 text-[10px] font-bold text-white hover:bg-[#674fb0] disabled:opacity-60"
+              >
+                <Send size={11} /> {logContactAttempt.isPending ? "Saving..." : "Save contact"}
+              </button>
+              <button type="button" onClick={() => setLogging(false)} className="rounded-lg border border-slate-200 px-3 py-1.5 text-[10px] font-bold text-slate-500">
+                Cancel
+              </button>
+            </div>
+          </td>
+        </tr>
+      )}
+    </>
+  );
+}
+
+function DoctorPipelineSection({
+  records,
+  ambassadors,
+}: {
+  records: DoctorAcquisitionRecord[];
+  ambassadors: AcquisitionAmbassador[];
+}) {
+  return (
+    <Section
+      title="Doctor pipeline"
+      description="Your working pipeline of doctors. Add prospects, move them through the stages, log every contact and record the ambassador who referred them."
+      icon={Target}
+    >
+      <IfPermitted roleKinds={[...PIPELINE_WRITE_ROLES]}>
+        <AddDoctorForm />
+      </IfPermitted>
+      {records.length ? (
+        <div className="mt-4 overflow-x-auto">
+          <table className="w-full min-w-[820px] text-left text-[10px]">
+            <thead className="text-[9px] uppercase tracking-[0.12em] text-slate-400">
+              <tr>
+                <th className="pb-2 font-bold">Doctor</th>
+                <th className="pb-2 font-bold">Stage</th>
+                <th className="pb-2 font-bold">Ambassador</th>
+                <th className="pb-2 font-bold">Contact history</th>
+                <th className="pb-2 font-bold">Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {records.map((record) => (
+                <PipelineRow key={record.id} record={record} ambassadors={ambassadors} />
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <div className="mt-3">
+          <StateMessage>No doctors in the pipeline yet. Add the first prospect above.</StateMessage>
+        </div>
+      )}
+    </Section>
+  );
+}
+
+function ContactActivityList({ attempts }: { attempts: import("@/lib/doctor-acquisition-dashboard").AcquisitionContactAttempt[] }) {
+  if (!attempts.length) return <StateMessage>No contact activity has been logged yet.</StateMessage>;
+  const recent = [...attempts].sort((a, b) => new Date(b.contacted_at).valueOf() - new Date(a.contacted_at).valueOf());
+  return (
+    <div className="space-y-2">
+      {recent.slice(0, 8).map((attempt) => (
+        <div key={attempt.id} className="flex items-start justify-between gap-3 rounded-xl bg-[#f7f9fb] px-3 py-2.5">
+          <div className="min-w-0">
+            <p className="text-[11px] font-semibold text-slate-600">
+              {humaniseOption(attempt.contact_channel)} · {humaniseOption(attempt.outcome)}
+            </p>
+            {attempt.notes && <p className="mt-1 truncate text-[10px] text-slate-400">{attempt.notes}</p>}
+          </div>
+          <span className="shrink-0 text-[10px] text-slate-400">{formatLiveDate(attempt.contacted_at)}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export default function DoctorAcquisition() {
   const dashboard = useDoctorAcquisitionDashboard();
   const data = dashboard.data;
@@ -423,8 +787,8 @@ export default function DoctorAcquisition() {
             </p>
           </div>
           <div className="rounded-2xl border border-[#cfeee2] bg-[#f0fbf6] px-4 py-3 text-[10px] text-[#247e65]">
-            <p className="font-bold uppercase tracking-[0.12em]">Read-only command centre</p>
-            <p className="mt-1">Source records remain protected by existing Supabase RLS.</p>
+            <p className="font-bold uppercase tracking-[0.12em]">Live pipeline</p>
+            <p className="mt-1">Leads and contact history are scoped to your organisation by Supabase RLS.</p>
           </div>
         </div>
 
@@ -455,6 +819,13 @@ export default function DoctorAcquisition() {
               <Metric label="Enrolled" value={String(metrics.enrolledCount)} detail={`${formatPercent(metrics.enrollmentRate)} of records`} tone="mint" icon={CheckCircle2} />
               <Metric label="Converted" value={String(metrics.convertedCount)} detail={`${formatPercent(metrics.conversionRate)} of records`} tone="mint" icon={Target} />
               <Metric label="Lost" value={String(metrics.lostCount)} detail={`${formatPercent(metrics.lostRate)} of records`} tone="red" icon={AlertTriangle} />
+            </div>
+
+            <div className="mt-5 grid gap-5 xl:grid-cols-[minmax(0,1.4fr)_minmax(0,0.6fr)]">
+              <DoctorPipelineSection records={recentRecords} ambassadors={data.ambassadors} />
+              <Section title="Recent contact activity" description="Every contact attempt logged against a pipeline doctor." icon={Send}>
+                <ContactActivityList attempts={data.contactAttempts} />
+              </Section>
             </div>
 
             <div className="mt-5 grid gap-5 xl:grid-cols-[minmax(0,1.15fr)_minmax(0,0.85fr)]">
@@ -528,7 +899,7 @@ export default function DoctorAcquisition() {
                 <div className="space-y-2 text-[11px] leading-5 text-slate-500">
                   <p className="rounded-xl bg-[#f7f9fb] p-3">Acquisition records are selected without an organization_id filter because that column does not exist. Supabase RLS scopes them through doctor_acquisition.doctor_id → doctors.organization_id.</p>
                   <p className="rounded-xl bg-[#f7f9fb] p-3">Doctors, employees, departments, tasks, tickets, KPIs, periods and alerts are selected with the authenticated organisation context. KPI targets and results are filtered only through their KPI and period relationships.</p>
-                  <p className="rounded-xl bg-[#f7f9fb] p-3">This page is read-only. It does not create, update or delete acquisition, doctor, task, ticket, alert or KPI records.</p>
+                  <p className="rounded-xl bg-[#f7f9fb] p-3">The doctor pipeline lets permitted roles add prospects, move them through the acquisition stages, log every contact attempt and assign a referring ambassador. Those writes are limited to the doctor pipeline tables and stay inside the organisation.</p>
                 </div>
               </Section>
             </div>

@@ -18,6 +18,7 @@ import {
   WalletCards,
 } from "lucide-react";
 import { AppShell } from "@/components/medmap/AppShell";
+import { StateMessage, formatLiveDate } from "@/components/medmap/dashboard-ui";
 import { cn } from "@/lib/utils";
 import {
   useCurrentOrganisation,
@@ -148,18 +149,6 @@ function formatOrganisationName(organization: OrganizationRecord | null) {
     : "Authenticated organisation";
 }
 
-function formatLiveDate(value: string | null) {
-  if (!value) return "Date not provided";
-  const date = new Date(value.includes("T") ? value : `${value}T12:00:00`);
-  return Number.isNaN(date.valueOf())
-    ? value
-    : new Intl.DateTimeFormat("en-ZA", {
-        day: "2-digit",
-        month: "short",
-        year: "numeric",
-      }).format(date);
-}
-
 function ErrorState({
   message = "This section could not be loaded.",
   onRetry,
@@ -168,53 +157,18 @@ function ErrorState({
   onRetry?: () => void;
 }) {
   return (
-    <div className="rounded-xl border border-[#f0cdca] bg-[#fff8f7] p-3">
-      <p className="text-[11px] leading-5 text-[#a34f4b]">
-        {message} Try again after the connection is available.
-      </p>
-      {onRetry && (
-        <button
-          onClick={onRetry}
-          className="mt-2 rounded-lg bg-[#bd504d] px-3 py-1.5 text-[10px] font-bold text-white transition hover:bg-[#a34f4b]"
-        >
-          Retry
-        </button>
-      )}
-    </div>
+    <StateMessage tone="error" onRetry={onRetry}>
+      {`${message} Try again after the connection is available.`}
+    </StateMessage>
   );
 }
 
 function LoadingState({ message = "Loading live data…" }: { message?: string }) {
-  return (
-    <p className="rounded-xl bg-[#f7f9fb] p-3 text-[11px] text-slate-400">
-      {message}
-    </p>
-  );
+  return <StateMessage>{message}</StateMessage>;
 }
 
 function EmptyState({ children }: { children: React.ReactNode }) {
-  return (
-    <p className="rounded-xl bg-[#f7f9fb] p-3 text-[11px] text-slate-400">
-      {children}
-    </p>
-  );
-}
-
-function RecordState({
-  pending,
-  error,
-  empty,
-  children,
-}: {
-  pending: boolean;
-  error: boolean;
-  empty: boolean;
-  children: React.ReactNode;
-}) {
-  if (pending) return <LoadingState />;
-  if (error) return <ErrorState />;
-  if (empty) return <EmptyState>No live records are available.</EmptyState>;
-  return <>{children}</>;
+  return <StateMessage>{children}</StateMessage>;
 }
 
 type ExecutiveArea = {
@@ -680,95 +634,6 @@ export function CeoDashboard() {
               </div>
             )}
           </div>
-        </section>
-
-        <section className="mt-5 rounded-2xl border border-[#c9d7ec] bg-[#f7faff] p-5 shadow-[0_5px_20px_rgba(21,36,58,0.035)] sm:p-6">
-          <div className="flex flex-col justify-between gap-3 md:flex-row md:items-start">
-            <div>
-              <div className="flex items-center gap-2">
-                <span className="grid size-8 place-items-center rounded-lg bg-[#eaf3ff] text-[#4a87c9]">
-                  <Target size={16} />
-                </span>
-                <h2 className="font-display text-[16px] font-bold text-[#152239]">
-                  Organisation and people status
-                </h2>
-              </div>
-              <p className="mt-2 text-[11px] text-slate-500">
-                Verified organisation-scoped records available to the
-                authenticated command centre.
-              </p>
-            </div>
-            <StatusPill
-              status={
-                people.isError
-                  ? "critical"
-                  : people.isPending
-                    ? "attention"
-                    : "healthy"
-              }
-              label={
-                people.isError
-                  ? "Data unavailable"
-                  : people.isPending
-                    ? "Loading"
-                    : "RLS connected"
-              }
-            />
-          </div>
-          {people.isPending ? (
-            <div className="mt-5">
-              <LoadingState message="Loading live people…" />
-            </div>
-          ) : people.isError ? (
-            <div className="mt-5">
-              <ErrorState message="People records could not be loaded." onRetry={() => people.refetch()} />
-            </div>
-          ) : !employeeRows.length && !departmentRows.length ? (
-            <div className="mt-5">
-              <EmptyState>No people yet.</EmptyState>
-            </div>
-          ) : (
-            <div className="mt-5 grid gap-3 md:grid-cols-3">
-              <div className="rounded-xl bg-white p-4">
-                <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-slate-400">
-                  Organisation context
-                </p>
-                <p className="mt-2 font-display text-[22px] font-bold text-[#152239]">
-                  {organisationName}
-                </p>
-                <p className="mt-2 text-[11px] leading-5 text-slate-500">
-                  Resolved through the authenticated employee relationship.
-                </p>
-              </div>
-              <div className="rounded-xl bg-white p-4">
-                <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-slate-400">
-                  Active employees
-                </p>
-                <p className="mt-2 font-display text-[25px] font-bold text-[#152239]">
-                  {employeeRows.length
-                    ? String(activeEmployeeCount)
-                    : "Awaiting live data"}
-                </p>
-                <p className="mt-2 text-[11px] leading-5 text-slate-500">
-                  Derived from employee status values returned by the backend.
-                </p>
-              </div>
-              <div className="rounded-xl bg-white p-4">
-                <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-slate-400">
-                  Departments
-                </p>
-                <p className="mt-2 font-display text-[25px] font-bold text-[#152239]">
-                  {departmentRows.length
-                    ? String(departmentRows.length)
-                    : "Awaiting live data"}
-                </p>
-                <p className="mt-2 text-[11px] leading-5 text-slate-500">
-                  Department records visible through the current organisation
-                  scope.
-                </p>
-              </div>
-            </div>
-          )}
         </section>
 
         <section id="governance" className="mt-5">

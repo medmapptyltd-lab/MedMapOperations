@@ -212,7 +212,7 @@ export type FinanceData = {
   periods: FinancialPeriod[];
 };
 
-type RawRow = Readonly<Record<string, unknown>>;
+export type RawRow = Readonly<Record<string, unknown>>;
 
 type QueryState<T> = {
   data: T | undefined;
@@ -222,9 +222,11 @@ type QueryState<T> = {
   refetch: () => Promise<unknown>;
 };
 
-const columns = {
+export const columns = {
   companyAlerts:
-    "id, organization_id, alert_type, title, message, severity, source_type, source_id, status, starts_at, expires_at, acknowledged_at, resolved_at, created_at, updated_at",
+    "id, organization_id, alert_type, title, message, severity, source_type, source_id, status, starts_at, expires_at, acknowledged_at, acknowledged_by_employee_id, resolved_at, resolved_by_employee_id, created_at, updated_at",
+  customerCases:
+    "id, organization_id, subject, description, priority, status, source, reported_by_employee_id, assigned_to_employee_id, category_id, patient_id, doctor_id, booking_id, customer_type, resolution_summary, internal_notes, first_response_at, resolved_at, closed_at, sla_response_due_at, sla_resolution_due_at, created_at, updated_at",
   deadlines:
     "id, organization_id, department_id, owner_employee_id, title, description, due_at, priority, status, linked_task_id, linked_ticket_id, created_at, updated_at",
   departments:
@@ -250,24 +252,24 @@ const columns = {
     "id, organization_id, department_id, reported_by, assigned_to, kpi_id, ticket_number, title, description, category, priority, status, due_date, resolved_at, created_at, updated_at",
 } as const;
 
-function isRawRow(value: unknown): value is RawRow {
+export function isRawRow(value: unknown): value is RawRow {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function rawRows(value: unknown): RawRow[] {
+export function rawRows(value: unknown): RawRow[] {
   return Array.isArray(value) ? value.filter(isRawRow) : [];
 }
 
-function text(row: RawRow, key: string): string | null {
+export function text(row: RawRow, key: string): string | null {
   const value = row[key];
   return typeof value === "string" ? value : null;
 }
 
-function requiredText(row: RawRow, key: string): string {
+export function requiredText(row: RawRow, key: string): string {
   return text(row, key) ?? "";
 }
 
-function numberValue(row: RawRow, key: string): number | null {
+export function numberValue(row: RawRow, key: string): number | null {
   const value = row[key];
   if (typeof value === "number" && Number.isFinite(value)) return value;
   if (typeof value !== "string" || value.trim() === "") return null;
@@ -275,7 +277,7 @@ function numberValue(row: RawRow, key: string): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-function booleanValue(row: RawRow, key: string): boolean {
+export function booleanValue(row: RawRow, key: string): boolean {
   return row[key] === true;
 }
 
@@ -303,9 +305,10 @@ const scopeColumnsByTable: TableScopeColumnMap = {
   expenses: {},
   financial_periods: {},
   company_alerts: {},
+  customer_cases: { employee: "assigned_to_employee_id" },
 };
 
-function applyScopeToQuery(
+export function applyScopeToQuery(
   queryBuilder: unknown,
   table: string,
   scope?: DashboardScope,
@@ -322,7 +325,7 @@ function applyScopeToQuery(
   return q;
 }
 
-async function selectRows(
+export async function selectRows(
   table: string,
   selection: string,
   organizationId: string,
@@ -338,7 +341,7 @@ async function selectRows(
   return rawRows(data);
 }
 
-async function selectRelatedRows(
+export async function selectRelatedRows(
   table: string,
   selection: string,
   filters: { column: string; values: string[] }[],
@@ -375,7 +378,7 @@ function parseCompanyAlert(row: RawRow): CompanyAlert {
   };
 }
 
-function parseDeadline(row: RawRow): Deadline {
+export function parseDeadline(row: RawRow): Deadline {
   return {
     id: requiredText(row, "id"),
     organization_id: text(row, "organization_id"),
@@ -393,7 +396,7 @@ function parseDeadline(row: RawRow): Deadline {
   };
 }
 
-function parseDepartment(row: RawRow): DepartmentContext {
+export function parseDepartment(row: RawRow): DepartmentContext {
   return {
     id: requiredText(row, "id"),
     organization_id: text(row, "organization_id"),
@@ -405,7 +408,7 @@ function parseDepartment(row: RawRow): DepartmentContext {
   };
 }
 
-function parseEmployee(row: RawRow): EmployeeContext {
+export function parseEmployee(row: RawRow): EmployeeContext {
   return {
     id: requiredText(row, "id"),
     organization_id: text(row, "organization_id"),
@@ -417,7 +420,7 @@ function parseEmployee(row: RawRow): EmployeeContext {
   };
 }
 
-function parseKpiPeriod(row: RawRow): KpiPeriod {
+export function parseKpiPeriod(row: RawRow): KpiPeriod {
   return {
     id: requiredText(row, "id"),
     organization_id: text(row, "organization_id"),
@@ -429,7 +432,7 @@ function parseKpiPeriod(row: RawRow): KpiPeriod {
   };
 }
 
-function parseKpi(row: RawRow): Kpi {
+export function parseKpi(row: RawRow): Kpi {
   return {
     id: requiredText(row, "id"),
     organization_id: text(row, "organization_id"),
@@ -446,7 +449,7 @@ function parseKpi(row: RawRow): Kpi {
   };
 }
 
-function parseKpiTarget(row: RawRow): KpiTarget {
+export function parseKpiTarget(row: RawRow): KpiTarget {
   return {
     id: requiredText(row, "id"),
     kpi_id: requiredText(row, "kpi_id"),
@@ -461,7 +464,7 @@ function parseKpiTarget(row: RawRow): KpiTarget {
   };
 }
 
-function parseKpiResult(row: RawRow): KpiResult {
+export function parseKpiResult(row: RawRow): KpiResult {
   return {
     id: requiredText(row, "id"),
     kpi_id: requiredText(row, "kpi_id"),
@@ -525,7 +528,7 @@ function parseFinancialPeriod(row: RawRow): FinancialPeriod {
   };
 }
 
-function parseTask(row: RawRow): Task {
+export function parseTask(row: RawRow): Task {
   return {
     id: requiredText(row, "id"),
     organization_id: text(row, "organization_id"),
@@ -545,7 +548,7 @@ function parseTask(row: RawRow): Task {
   };
 }
 
-function parseTicket(row: RawRow): Ticket {
+export function parseTicket(row: RawRow): Ticket {
   return {
     id: requiredText(row, "id"),
     organization_id: text(row, "organization_id"),

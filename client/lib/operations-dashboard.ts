@@ -1,9 +1,33 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  columns,
   isActiveCompanyAlert,
   isResolvedStatus,
   normaliseStatus,
+  parseDeadline,
+  parseDepartment,
+  parseEmployee,
+  parseKpi,
+  parseKpiPeriod,
+  parseKpiResult,
+  parseKpiTarget,
+  parseTask,
+  parseTicket,
+  requiredText,
+  selectRelatedRows,
+  selectRows,
+  text,
   type DashboardScope,
+  type DepartmentContext,
+  type Deadline,
+  type EmployeeContext,
+  type Kpi,
+  type KpiPeriod,
+  type KpiResult,
+  type KpiTarget,
+  type RawRow,
+  type Task,
+  type Ticket,
 } from "./executive-dashboard";
 import { getSupabaseClient } from "./supabase";
 import { useSupabaseAuth } from "./supabase-auth";
@@ -12,129 +36,17 @@ import {
   useCurrentOrganisation,
 } from "./supabase-identity";
 
-export type OperationsTask = {
-  id: string;
-  organization_id: string | null;
-  department_id: string | null;
-  assigned_to: string | null;
-  created_by: string | null;
-  kpi_id: string | null;
-  title: string;
-  description: string | null;
-  priority: string;
-  status: string;
-  progress_percentage: number | null;
-  due_date: string | null;
-  completed_at: string | null;
-  created_at: string;
-  updated_at: string;
-};
-
-export type OperationsTicket = {
-  id: string;
-  organization_id: string | null;
-  department_id: string | null;
-  reported_by: string | null;
-  assigned_to: string | null;
-  kpi_id: string | null;
-  ticket_number: number | null;
-  title: string;
-  description: string | null;
-  category: string | null;
-  priority: string;
-  status: string;
-  due_date: string | null;
-  resolved_at: string | null;
-  created_at: string;
-  updated_at: string;
-};
-
-export type OperationsDeadline = {
-  id: string;
-  organization_id: string | null;
-  department_id: string | null;
-  owner_employee_id: string | null;
-  title: string;
-  description: string | null;
-  due_at: string;
-  priority: string;
-  status: string;
-  linked_task_id: string | null;
-  linked_ticket_id: string | null;
-  created_at: string;
-  updated_at: string;
-};
-
-export type OperationsEmployee = {
-  id: string;
-  organization_id: string | null;
-  first_name: string;
-  last_name: string;
-  job_title: string | null;
-  department_id: string | null;
-  employee_status: string;
-};
-
-export type OperationsDepartment = {
-  id: string;
-  organization_id: string | null;
-  code: string;
-  name: string;
-  description: string | null;
-  department_group: string;
-  active: boolean;
-};
-
-export type OperationsKpi = {
-  id: string;
-  organization_id: string | null;
-  department_id: string | null;
-  owner_employee_id: string | null;
-  name: string;
-  code: string;
-  description: string | null;
-  category: string | null;
-  measurement_type: string;
-  direction: string;
-  unit: string | null;
-  active: boolean;
-};
-
-export type OperationsKpiPeriod = {
-  id: string;
-  organization_id: string | null;
-  period_type: string;
-  period_name: string;
-  start_date: string;
-  end_date: string;
-  status: string;
-};
-
-export type OperationsKpiTarget = {
-  id: string;
-  kpi_id: string;
-  employee_id: string | null;
-  department_id: string | null;
-  period_id: string;
-  target_value: number | null;
-  green_threshold: number | null;
-  yellow_threshold: number | null;
-  critical_threshold: number | null;
-  notes: string | null;
-};
-
-export type OperationsKpiResult = {
-  id: string;
-  kpi_id: string;
-  target_id: string | null;
-  employee_id: string | null;
-  department_id: string | null;
-  period_id: string;
-  actual_value: number | null;
-  calculated_percentage: number | null;
-  status: string;
-  commentary: string | null;
-};
+// Shared record shapes live in executive-dashboard and are re-exported here so
+// existing operations consumers keep their import names.
+export type OperationsTask = Task;
+export type OperationsTicket = Ticket;
+export type OperationsDeadline = Deadline;
+export type OperationsEmployee = EmployeeContext;
+export type OperationsDepartment = DepartmentContext;
+export type OperationsKpi = Kpi;
+export type OperationsKpiPeriod = KpiPeriod;
+export type OperationsKpiTarget = KpiTarget;
+export type OperationsKpiResult = KpiResult;
 
 export type OperationsAlert = {
   id: string;
@@ -196,8 +108,6 @@ export type OperationsDashboardData = {
   cases: OperationsCase[];
 };
 
-type RawRow = Readonly<Record<string, unknown>>;
-
 type QueryState = {
   data: OperationsDashboardData | undefined;
   isPending: boolean;
@@ -205,268 +115,6 @@ type QueryState = {
   error: Error | null;
   refetch: () => Promise<unknown>;
 };
-
-const columns = {
-  tasks:
-    "id, organization_id, department_id, assigned_to, created_by, kpi_id, title, description, priority, status, progress_percentage, due_date, completed_at, created_at, updated_at",
-  tickets:
-    "id, organization_id, department_id, reported_by, assigned_to, kpi_id, ticket_number, title, description, category, priority, status, due_date, resolved_at, created_at, updated_at",
-  deadlines:
-    "id, organization_id, department_id, owner_employee_id, title, description, due_at, priority, status, linked_task_id, linked_ticket_id, created_at, updated_at",
-  employees:
-    "id, organization_id, first_name, last_name, job_title, department_id, employee_status",
-  departments:
-    "id, organization_id, code, name, description, department_group, active",
-  kpis: "id, organization_id, department_id, owner_employee_id, name, code, description, category, measurement_type, direction, unit, active",
-  kpiPeriods:
-    "id, organization_id, period_type, period_name, start_date, end_date, status",
-  kpiTargets:
-    "id, kpi_id, employee_id, department_id, period_id, target_value, green_threshold, yellow_threshold, critical_threshold, notes",
-  kpiResults:
-    "id, kpi_id, target_id, employee_id, department_id, period_id, actual_value, calculated_percentage, status, commentary",
-  companyAlerts:
-    "id, organization_id, alert_type, title, message, severity, source_type, source_id, status, starts_at, expires_at, acknowledged_at, acknowledged_by_employee_id, resolved_at, resolved_by_employee_id, created_at, updated_at",
-  customerCases:
-    "id, organization_id, subject, description, priority, status, source, reported_by_employee_id, assigned_to_employee_id, category_id, patient_id, doctor_id, booking_id, customer_type, resolution_summary, internal_notes, first_response_at, resolved_at, closed_at, sla_response_due_at, sla_resolution_due_at, created_at, updated_at",
-} as const;
-
-function isRawRow(value: unknown): value is RawRow {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function rawRows(value: unknown): RawRow[] {
-  return Array.isArray(value) ? value.filter(isRawRow) : [];
-}
-
-function text(row: RawRow, key: string): string | null {
-  const value = row[key];
-  return typeof value === "string" ? value : null;
-}
-
-function requiredText(row: RawRow, key: string): string {
-  return text(row, key) ?? "";
-}
-
-function numberValue(row: RawRow, key: string): number | null {
-  const value = row[key];
-  if (typeof value === "number" && Number.isFinite(value)) return value;
-  if (typeof value !== "string" || value.trim() === "") return null;
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : null;
-}
-
-function booleanValue(row: RawRow, key: string): boolean {
-  return row[key] === true;
-}
-
-const operationsScopeColumns: Record<
-  string,
-  { department?: string; employee?: string }
-> = {
-  tasks: { department: "department_id", employee: "assigned_to" },
-  tickets: { department: "department_id", employee: "assigned_to" },
-  deadlines: { department: "department_id", employee: "owner_employee_id" },
-  employees: { department: "department_id" },
-  departments: {},
-  kpis: { department: "department_id", employee: "owner_employee_id" },
-  kpi_periods: {},
-  company_alerts: {},
-  customer_cases: { employee: "assigned_to_employee_id" },
-  kpi_targets: { department: "department_id", employee: "employee_id" },
-  kpi_results: { department: "department_id", employee: "employee_id" },
-};
-
-function applyOperationsScope(
-  query: ReturnType<ReturnType<typeof getSupabaseClient>["from"]>["select"] extends () => infer Q ? Q : never,
-  table: string,
-  scope?: DashboardScope,
-) {
-  const cols = operationsScopeColumns[table];
-  if (!scope || !cols) return query;
-  let q = query;
-  if (cols.department && scope.departmentIds?.length) {
-    q = q.in(cols.department, scope.departmentIds) as typeof q;
-  }
-  if (cols.employee && scope.employeeId) {
-    q = q.eq(cols.employee, scope.employeeId) as typeof q;
-  }
-  return q;
-}
-
-async function selectOrganizationRows(
-  table: string,
-  selection: string,
-  organizationId: string,
-  scope?: DashboardScope,
-): Promise<RawRow[]> {
-  const base = getSupabaseClient()
-    .from(table)
-    .select(selection)
-    .eq("organization_id", organizationId);
-  const scoped = applyOperationsScope(base as never, table, scope);
-  const { data, error } = await scoped;
-  if (error) throw error;
-  return rawRows(data);
-}
-
-async function selectRelatedRows(
-  table: string,
-  selection: string,
-  filters: { column: string; values: string[] }[],
-  scope?: DashboardScope,
-): Promise<RawRow[]> {
-  if (filters.some(({ values }) => values.length === 0)) return [];
-  let query = getSupabaseClient().from(table).select(selection) as ReturnType<
-    ReturnType<typeof getSupabaseClient>["from"]
-  >["select"] extends () => infer Q ? Q : never;
-  for (const { column, values } of filters) query = query.in(column, values) as typeof query;
-  const scoped = applyOperationsScope(query as never, table, scope);
-  const { data, error } = await scoped;
-  if (error) throw error;
-  return rawRows(data);
-}
-
-function parseTask(row: RawRow): OperationsTask {
-  return {
-    id: requiredText(row, "id"),
-    organization_id: text(row, "organization_id"),
-    department_id: text(row, "department_id"),
-    assigned_to: text(row, "assigned_to"),
-    created_by: text(row, "created_by"),
-    kpi_id: text(row, "kpi_id"),
-    title: requiredText(row, "title"),
-    description: text(row, "description"),
-    priority: requiredText(row, "priority"),
-    status: requiredText(row, "status"),
-    progress_percentage: numberValue(row, "progress_percentage"),
-    due_date: text(row, "due_date"),
-    completed_at: text(row, "completed_at"),
-    created_at: requiredText(row, "created_at"),
-    updated_at: requiredText(row, "updated_at"),
-  };
-}
-
-function parseTicket(row: RawRow): OperationsTicket {
-  return {
-    id: requiredText(row, "id"),
-    organization_id: text(row, "organization_id"),
-    department_id: text(row, "department_id"),
-    reported_by: text(row, "reported_by"),
-    assigned_to: text(row, "assigned_to"),
-    kpi_id: text(row, "kpi_id"),
-    ticket_number: numberValue(row, "ticket_number"),
-    title: requiredText(row, "title"),
-    description: text(row, "description"),
-    category: text(row, "category"),
-    priority: requiredText(row, "priority"),
-    status: requiredText(row, "status"),
-    due_date: text(row, "due_date"),
-    resolved_at: text(row, "resolved_at"),
-    created_at: requiredText(row, "created_at"),
-    updated_at: requiredText(row, "updated_at"),
-  };
-}
-
-function parseDeadline(row: RawRow): OperationsDeadline {
-  return {
-    id: requiredText(row, "id"),
-    organization_id: text(row, "organization_id"),
-    department_id: text(row, "department_id"),
-    owner_employee_id: text(row, "owner_employee_id"),
-    title: requiredText(row, "title"),
-    description: text(row, "description"),
-    due_at: requiredText(row, "due_at"),
-    priority: requiredText(row, "priority"),
-    status: requiredText(row, "status"),
-    linked_task_id: text(row, "linked_task_id"),
-    linked_ticket_id: text(row, "linked_ticket_id"),
-    created_at: requiredText(row, "created_at"),
-    updated_at: requiredText(row, "updated_at"),
-  };
-}
-
-function parseEmployee(row: RawRow): OperationsEmployee {
-  return {
-    id: requiredText(row, "id"),
-    organization_id: text(row, "organization_id"),
-    first_name: requiredText(row, "first_name"),
-    last_name: requiredText(row, "last_name"),
-    job_title: text(row, "job_title"),
-    department_id: text(row, "department_id"),
-    employee_status: requiredText(row, "employee_status"),
-  };
-}
-
-function parseDepartment(row: RawRow): OperationsDepartment {
-  return {
-    id: requiredText(row, "id"),
-    organization_id: text(row, "organization_id"),
-    code: requiredText(row, "code"),
-    name: requiredText(row, "name"),
-    description: text(row, "description"),
-    department_group: requiredText(row, "department_group"),
-    active: booleanValue(row, "active"),
-  };
-}
-
-function parseKpi(row: RawRow): OperationsKpi {
-  return {
-    id: requiredText(row, "id"),
-    organization_id: text(row, "organization_id"),
-    department_id: text(row, "department_id"),
-    owner_employee_id: text(row, "owner_employee_id"),
-    name: requiredText(row, "name"),
-    code: requiredText(row, "code"),
-    description: text(row, "description"),
-    category: text(row, "category"),
-    measurement_type: requiredText(row, "measurement_type"),
-    direction: requiredText(row, "direction"),
-    unit: text(row, "unit"),
-    active: booleanValue(row, "active"),
-  };
-}
-
-function parseKpiPeriod(row: RawRow): OperationsKpiPeriod {
-  return {
-    id: requiredText(row, "id"),
-    organization_id: text(row, "organization_id"),
-    period_type: requiredText(row, "period_type"),
-    period_name: requiredText(row, "period_name"),
-    start_date: requiredText(row, "start_date"),
-    end_date: requiredText(row, "end_date"),
-    status: requiredText(row, "status"),
-  };
-}
-
-function parseKpiTarget(row: RawRow): OperationsKpiTarget {
-  return {
-    id: requiredText(row, "id"),
-    kpi_id: requiredText(row, "kpi_id"),
-    employee_id: text(row, "employee_id"),
-    department_id: text(row, "department_id"),
-    period_id: requiredText(row, "period_id"),
-    target_value: numberValue(row, "target_value"),
-    green_threshold: numberValue(row, "green_threshold"),
-    yellow_threshold: numberValue(row, "yellow_threshold"),
-    critical_threshold: numberValue(row, "critical_threshold"),
-    notes: text(row, "notes"),
-  };
-}
-
-function parseKpiResult(row: RawRow): OperationsKpiResult {
-  return {
-    id: requiredText(row, "id"),
-    kpi_id: requiredText(row, "kpi_id"),
-    target_id: text(row, "target_id"),
-    employee_id: text(row, "employee_id"),
-    department_id: text(row, "department_id"),
-    period_id: requiredText(row, "period_id"),
-    actual_value: numberValue(row, "actual_value"),
-    calculated_percentage: numberValue(row, "calculated_percentage"),
-    status: requiredText(row, "status"),
-    commentary: text(row, "commentary"),
-  };
-}
 
 function parseAlert(row: RawRow): OperationsAlert {
   return {
@@ -533,25 +181,15 @@ async function fetchOperationsDashboard(
     alertRows,
     caseRows,
   ] = await Promise.all([
-    selectOrganizationRows("tasks", columns.tasks, organizationId, scope),
-    selectOrganizationRows("tickets", columns.tickets, organizationId, scope),
-    selectOrganizationRows("deadlines", columns.deadlines, organizationId, scope),
-    selectOrganizationRows("employees", columns.employees, organizationId, scope),
-    selectOrganizationRows("departments", columns.departments, organizationId, scope),
-    selectOrganizationRows("kpis", columns.kpis, organizationId, scope),
-    selectOrganizationRows("kpi_periods", columns.kpiPeriods, organizationId, scope),
-    selectOrganizationRows(
-      "company_alerts",
-      columns.companyAlerts,
-      organizationId,
-      scope,
-    ),
-    selectOrganizationRows(
-      "customer_cases",
-      columns.customerCases,
-      organizationId,
-      scope,
-    ),
+    selectRows("tasks", columns.tasks, organizationId, scope),
+    selectRows("tickets", columns.tickets, organizationId, scope),
+    selectRows("deadlines", columns.deadlines, organizationId, scope),
+    selectRows("employees", columns.employees, organizationId, scope),
+    selectRows("departments", columns.departments, organizationId, scope),
+    selectRows("kpis", columns.kpis, organizationId, scope),
+    selectRows("kpi_periods", columns.kpiPeriods, organizationId, scope),
+    selectRows("company_alerts", columns.companyAlerts, organizationId, scope),
+    selectRows("customer_cases", columns.customerCases, organizationId, scope),
   ]);
 
   const kpis = kpiRows.map(parseKpi);

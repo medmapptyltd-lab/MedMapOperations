@@ -85,7 +85,7 @@ export default function KPIs() {
     isDepartmentScoped ? departmentIds : undefined,
     { enabled: !scopePending },
   );
-  const { createTarget, createResult, updateResult } = useKpiMutations();
+  const { createTarget, updateTarget, createResult, updateResult } = useKpiMutations();
 
   const { rows, period } = useMemo(() => buildKpiRows(kpisQuery.data), [kpisQuery.data]);
   const sectionState = getSectionState(kpisQuery.isPending, kpisQuery.isError, kpisQuery.data?.kpis);
@@ -94,6 +94,8 @@ export default function KPIs() {
   const [showAddResult, setShowAddResult] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingValue, setEditingValue] = useState("");
+  const [editingTargetId, setEditingTargetId] = useState<string | null>(null);
+  const [editingTargetValue, setEditingTargetValue] = useState("");
 
   const periods = kpisQuery.data?.periods ?? [];
   const kpis = kpisQuery.data?.kpis ?? [];
@@ -197,6 +199,34 @@ export default function KPIs() {
       });
     }
     cancelInlineEdit();
+  };
+
+  const startTargetEdit = (row: ExecutiveKpiRow) => {
+    setEditingTargetId(row.id);
+    setEditingTargetValue(row.target === null ? "" : String(row.target));
+  };
+
+  const cancelTargetEdit = () => {
+    setEditingTargetId(null);
+    setEditingTargetValue("");
+  };
+
+  const saveTarget = (row: ExecutiveKpiRow) => {
+    const targetValue = Number(editingTargetValue);
+    if (editingTargetValue.trim() === "" || !Number.isFinite(targetValue)) return;
+    if (row.targetId) {
+      void updateTarget.mutateAsync({ id: row.targetId, targetValue });
+    } else if (period) {
+      void createTarget.mutateAsync({
+        kpiId: row.id,
+        periodId: period.id,
+        targetValue,
+        greenThreshold: row.greenThreshold,
+        yellowThreshold: row.yellowThreshold,
+        criticalThreshold: row.criticalThreshold,
+      });
+    }
+    cancelTargetEdit();
   };
 
   return (
@@ -545,9 +575,55 @@ export default function KPIs() {
                             </p>
                           </td>
                           <td className="px-3 py-3.5">
-                            <p className="font-display text-[13px] font-bold text-[#755bc0]">
-                              {formatNumber(row.target)}
-                            </p>
+                            {editingTargetId === row.id ? (
+                              <div className="flex items-center gap-1.5">
+                                <input
+                                  type="number"
+                                  autoFocus
+                                  value={editingTargetValue}
+                                  onChange={(e) => setEditingTargetValue(e.target.value)}
+                                  onKeyDown={(e) => {
+                                    if (e.key === "Enter") saveTarget(row);
+                                    if (e.key === "Escape") cancelTargetEdit();
+                                  }}
+                                  className="w-20 rounded-lg border border-[#c9d7ec] px-2 py-1 text-[12px] font-bold text-[#152239] outline-none focus:border-[#4a87c9]"
+                                />
+                                <button
+                                  type="button"
+                                  onClick={() => saveTarget(row)}
+                                  title="Save target"
+                                  className="grid size-6 place-items-center rounded-md bg-[#e8f8f2] text-[#168465] hover:bg-[#d5f2e7]"
+                                >
+                                  <Check size={13} />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={cancelTargetEdit}
+                                  title="Cancel"
+                                  className="grid size-6 place-items-center rounded-md bg-slate-100 text-slate-500 hover:bg-slate-200"
+                                >
+                                  <X size={13} />
+                                </button>
+                              </div>
+                            ) : (
+                              <div className="flex items-center gap-1.5">
+                                <p className="font-display text-[13px] font-bold text-[#755bc0]">
+                                  {formatNumber(row.target)}
+                                </p>
+                                <IfPermitted roleKinds={["ceo"]}>
+                                  {row.targetId || period ? (
+                                    <button
+                                      type="button"
+                                      onClick={() => startTargetEdit(row)}
+                                      title={row.targetId ? "Edit target" : "Set target"}
+                                      className="grid size-6 place-items-center rounded-md text-slate-400 hover:bg-slate-100 hover:text-[#755bc0]"
+                                    >
+                                      <Pencil size={12} />
+                                    </button>
+                                  ) : null}
+                                </IfPermitted>
+                              </div>
+                            )}
                           </td>
                           <td className="px-3 py-3.5">
                             {editingId === row.id ? (

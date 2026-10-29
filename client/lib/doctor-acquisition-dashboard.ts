@@ -169,10 +169,45 @@ export type AcquisitionAlert = {
   updated_at: string;
 };
 
+export type AcquisitionContactAttempt = {
+  id: string;
+  doctor_id: string;
+  ambassador_id: string | null;
+  employee_id: string | null;
+  contact_channel: string;
+  outcome: string;
+  contacted_at: string;
+  next_followup_at: string | null;
+  notes: string | null;
+};
+
+export type AcquisitionAmbassador = {
+  id: string;
+  first_name: string;
+  last_name: string;
+  email: string | null;
+  phone: string | null;
+  status: string;
+  current_tier: string | null;
+};
+
+export type AcquisitionReferral = {
+  id: string;
+  ambassador_id: string;
+  doctor_id: string;
+  referral_date: string;
+  probation_status: string;
+};
+
 export type DoctorAcquisitionRecord = DoctorAcquisitionRow & {
   doctor: DoctorProfile | null;
   owner: AcquisitionEmployee | null;
   department: AcquisitionDepartment | null;
+  ambassador: AcquisitionAmbassador | null;
+  referralId: string | null;
+  contactCount: number;
+  lastContactAt: string | null;
+  lastContactNote: string | null;
 };
 
 export type DoctorAcquisitionDashboardData = {
@@ -187,8 +222,16 @@ export type DoctorAcquisitionDashboardData = {
   kpiTargets: AcquisitionKpiTarget[];
   kpiResults: AcquisitionKpiResult[];
   alerts: AcquisitionAlert[];
+  ambassadors: AcquisitionAmbassador[];
+  contactAttempts: AcquisitionContactAttempt[];
   optionalErrors: string[];
 };
+
+export function displayAmbassadorName(ambassador: AcquisitionAmbassador | null) {
+  if (!ambassador) return "Unassigned";
+  const name = `${ambassador.first_name} ${ambassador.last_name}`.trim();
+  return name || "Unnamed ambassador";
+}
 
 type QueryState = {
   data: DoctorAcquisitionDashboardData | undefined;
@@ -219,6 +262,12 @@ const columns = {
     "id, kpi_id, target_id, employee_id, department_id, period_id, actual_value, calculated_percentage, status, commentary",
   companyAlerts:
     "id, organization_id, alert_type, title, message, severity, source_type, source_id, status, starts_at, expires_at, acknowledged_at, acknowledged_by, resolved_at, resolved_by, created_at, updated_at",
+  contactAttempts:
+    "id, doctor_id, ambassador_id, employee_id, contact_channel, outcome, contacted_at, next_followup_at, notes",
+  ambassadors:
+    "id, first_name, last_name, email, phone, status, current_tier",
+  ambassadorReferrals:
+    "id, ambassador_id, doctor_id, referral_date, probation_status",
 } as const;
 
 type UnknownRecord = Record<string, unknown>;
@@ -542,6 +591,45 @@ function parseAlert(row: unknown): AcquisitionAlert {
   };
 }
 
+function parseContactAttempt(row: unknown): AcquisitionContactAttempt {
+  const record = asRecord(row);
+  return {
+    id: requiredUuid(record, "id"),
+    doctor_id: requiredUuid(record, "doctor_id"),
+    ambassador_id: nullableUuid(record, "ambassador_id"),
+    employee_id: nullableUuid(record, "employee_id"),
+    contact_channel: requiredString(record, "contact_channel"),
+    outcome: requiredString(record, "outcome"),
+    contacted_at: normalizeTimestamp(record, "contacted_at"),
+    next_followup_at: nullableTimestamp(record, "next_followup_at"),
+    notes: nullableString(record, "notes"),
+  };
+}
+
+function parseAmbassador(row: unknown): AcquisitionAmbassador {
+  const record = asRecord(row);
+  return {
+    id: requiredUuid(record, "id"),
+    first_name: requiredString(record, "first_name"),
+    last_name: requiredString(record, "last_name"),
+    email: nullableString(record, "email"),
+    phone: nullableString(record, "phone"),
+    status: requiredString(record, "status"),
+    current_tier: nullableString(record, "current_tier"),
+  };
+}
+
+function parseAmbassadorReferral(row: unknown): AcquisitionReferral {
+  const record = asRecord(row);
+  return {
+    id: requiredUuid(record, "id"),
+    ambassador_id: requiredUuid(record, "ambassador_id"),
+    doctor_id: requiredUuid(record, "doctor_id"),
+    referral_date: requiredDate(record, "referral_date"),
+    probation_status: requiredString(record, "probation_status"),
+  };
+}
+
 function normalizeRows<T>(
   value: unknown,
   parser: (row: unknown) => T,
@@ -661,7 +749,7 @@ async function fetchDoctorAcquisitionDashboard(
 ): Promise<DoctorAcquisitionDashboardData> {
   const [acquisitionRows, doctorRows, employeeRows, departmentRows] =
     await Promise.all([
-      selectRows("doctor_acquisition", columns.doctorAcquisition, organizationId),
+      selectRelatedRows("doctor_acquisition", columns.doctorAcquisition, []),
       selectRows("doctors", columns.doctors, organizationId),
       selectRows("employees", columns.employees, organizationId, [
         { column: "employee_status", values: ["active"] },
@@ -714,43 +802,111 @@ async function fetchDoctorAcquisitionDashboard(
         .filter((value): value is string => Boolean(value)),
     ),
   ];
-  const [kpiResult, periodResult, taskResult, ticketResult, alertResult] =
-    await Promise.allSettled([
-      selectRows("kpis", columns.kpis, organizationId),
-      selectRows("kpi_periods", columns.kpiPeriods, organizationId),
-      selectByAnyRelationship(
-        "tasks",
-        columns.tasks,
-        organizationId,
-        [
-          { column: "department_id", values: departmentIds },
-          { column: "assigned_to", values: ownerIds },
-        ],
-      ),
-      selectByAnyRelationship(
-        "tickets",
-        columns.tickets,
-        organizationId,
-        [
-          { column: "department_id", values: departmentIds },
-          { column: "assigned_to", values: ownerIds },
-        ],
-      ),
-      selectRows("company_alerts", columns.companyAlerts, organizationId),
-    ]);
+  const doctorIds = [
+    ...new Set(records.map((record) => record.doctor_id)),
+  ];
+  const [
+    kpiResult,
+    periodResult,
+    taskResult,
+    ticketResult,
+    alertResult,
+    contactResult,
+    ambassadorResult,
+    referralResult,
+  ] = await Promise.allSettled([
+    selectRows("kpis", columns.kpis, organizationId),
+    selectRows("kpi_periods", columns.kpiPeriods, organizationId),
+    selectByAnyRelationship(
+      "tasks",
+      columns.tasks,
+      organizationId,
+      [
+        { column: "department_id", values: departmentIds },
+        { column: "assigned_to", values: ownerIds },
+      ],
+    ),
+    selectByAnyRelationship(
+      "tickets",
+      columns.tickets,
+      organizationId,
+      [
+        { column: "department_id", values: departmentIds },
+        { column: "assigned_to", values: ownerIds },
+      ],
+    ),
+    selectRows("company_alerts", columns.companyAlerts, organizationId),
+    selectRelatedRows("doctor_contact_attempts", columns.contactAttempts, [
+      { column: "doctor_id", values: doctorIds },
+    ]),
+    selectRows("ambassadors", columns.ambassadors),
+    selectRelatedRows("ambassador_referrals", columns.ambassadorReferrals, [
+      { column: "doctor_id", values: doctorIds },
+    ]),
+  ]);
 
   const kpis = parseOptionalRows(kpiResult, parseKpi, "KPI");
   const periods = parseOptionalRows(periodResult, parseKpiPeriod, "KPI period");
   const tasks = parseOptionalRows(taskResult, parseTask, "task");
   const tickets = parseOptionalRows(ticketResult, parseTicket, "ticket");
   const alerts = parseOptionalRows(alertResult, parseAlert, "company alert");
+  const contacts = parseOptionalRows(
+    contactResult,
+    parseContactAttempt,
+    "doctor contact",
+  );
+  const ambassadors = parseOptionalRows(
+    ambassadorResult,
+    parseAmbassador,
+    "ambassador",
+  );
+  const referrals = parseOptionalRows(
+    referralResult,
+    parseAmbassadorReferral,
+    "ambassador referral",
+  );
   const optionalErrors = [
     kpis.error,
     periods.error,
     tasks.error,
     tickets.error,
     alerts.error,
+    contacts.error,
+    ambassadors.error,
+    referrals.error,
   ].filter((value): value is string => Boolean(value));
+
+  const ambassadorById = new Map(
+    ambassadors.rows.map((ambassador) => [ambassador.id, ambassador]),
+  );
+  const referralByDoctorId = new Map<string, AcquisitionReferral>();
+  for (const referral of referrals.rows) {
+    if (!referralByDoctorId.has(referral.doctor_id)) {
+      referralByDoctorId.set(referral.doctor_id, referral);
+    }
+  }
+  const contactsByDoctorId = new Map<string, AcquisitionContactAttempt[]>();
+  for (const contact of contacts.rows) {
+    const existing = contactsByDoctorId.get(contact.doctor_id);
+    if (existing) existing.push(contact);
+    else contactsByDoctorId.set(contact.doctor_id, [contact]);
+  }
+
+  const enrichedRecords = records.map((record) => {
+    const doctorContacts = contactsByDoctorId.get(record.doctor_id) ?? [];
+    const sortedContacts = [...doctorContacts].sort(
+      (a, b) => new Date(b.contacted_at).valueOf() - new Date(a.contacted_at).valueOf(),
+    );
+    const referral = referralByDoctorId.get(record.doctor_id) ?? null;
+    return {
+      ...record,
+      ambassador: referral ? ambassadorById.get(referral.ambassador_id) ?? null : null,
+      referralId: referral?.id ?? null,
+      contactCount: doctorContacts.length,
+      lastContactAt: sortedContacts[0]?.contacted_at ?? null,
+      lastContactNote: sortedContacts[0]?.notes ?? null,
+    };
+  });
 
   let kpiTargets: AcquisitionKpiTarget[] = [];
   let kpiResults: AcquisitionKpiResult[] = [];
@@ -782,7 +938,7 @@ async function fetchDoctorAcquisitionDashboard(
   }
 
   return {
-    acquisitions: records,
+    acquisitions: enrichedRecords,
     doctors,
     employees,
     departments,
@@ -793,6 +949,8 @@ async function fetchDoctorAcquisitionDashboard(
     kpiTargets,
     kpiResults,
     alerts: alerts.rows.filter((alert) => isActiveAlert(alert)),
+    ambassadors: ambassadors.rows,
+    contactAttempts: contacts.rows,
     optionalErrors: [...new Set(optionalErrors)],
   };
 }

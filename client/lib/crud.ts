@@ -761,4 +761,246 @@ export function useDeadlinesMutations() {
   return { createDeadline, updateDeadline, deleteDeadline };
 }
 
+export type DoctorPipelineInput = {
+  firstName: string;
+  lastName: string;
+  email?: string | null;
+  phone?: string | null;
+  specialty?: string | null;
+  practiceName?: string | null;
+  city?: string | null;
+  province?: string | null;
+  acquisitionChannel?: string | null;
+  sourceDetail?: string | null;
+  ownerEmployeeId?: string | null;
+  first1000Campaign?: boolean;
+  notes?: string | null;
+};
+
+const acquisitionStatusToDoctorStatus: Record<string, string> = {
+  prospect: "prospect",
+  contacted: "contacted",
+  interested: "interested",
+  enrolled: "enrolled",
+  converted: "active",
+  lost: "lost",
+};
+
+export function useDoctorPipelineMutations() {
+  const organizationState = useCurrentOrganisation();
+  const organizationId = organizationState.organizationId;
+  const invalidate = useOrgScopedInvalidate();
+
+  const createPipelineEntry = useMutation({
+    mutationFn: async (input: DoctorPipelineInput): Promise<{ doctorId: string }> => {
+      if (!organizationId) throw new Error("Organisation is not available.");
+      const client = getSupabaseClient();
+      const { data, error } = await client
+        .from("doctors")
+        .insert({
+          organization_id: organizationId,
+          first_name: input.firstName,
+          last_name: input.lastName,
+          email: input.email ?? null,
+          phone: input.phone ?? null,
+          specialty: input.specialty ?? null,
+          practice_name: input.practiceName ?? null,
+          city: input.city ?? null,
+          province: input.province ?? null,
+          acquisition_source: input.acquisitionChannel ?? null,
+          acquisition_status: "prospect",
+          first_1000_campaign: input.first1000Campaign ?? false,
+          notes: input.notes ?? null,
+        })
+        .select("id")
+        .single();
+      if (error) throw error;
+      const doctorId = (data as { id: string }).id;
+      const { error: acquisitionError } = await client.from("doctor_acquisition").insert({
+        doctor_id: doctorId,
+        status: "prospect",
+        acquisition_channel: input.acquisitionChannel ?? null,
+        source_detail: input.sourceDetail ?? null,
+        owner_employee_id: input.ownerEmployeeId ?? null,
+      });
+      if (acquisitionError) throw acquisitionError;
+      return { doctorId };
+    },
+    onSuccess: () =>
+      invalidate(["doctor-acquisition-dashboard", "operations-dashboard", "executive-dashboard"]),
+  });
+
+  const updateAcquisitionStatus = useMutation({
+    mutationFn: async ({
+      id,
+      doctorId,
+      status,
+    }: {
+      id: string;
+      doctorId: string;
+      status: string;
+    }) => {
+      if (!organizationId) throw new Error("Organisation is not available.");
+      const client = getSupabaseClient();
+      const now = new Date().toISOString();
+      const patch: Record<string, unknown> = { status, updated_at: now };
+      if (status === "contacted") patch.contacted_at = now;
+      if (status === "enrolled") patch.enrolled_at = now;
+      if (status === "converted") patch.converted_at = now;
+      if (status === "lost") patch.lost_at = now;
+      const { error } = await client.from("doctor_acquisition").update(patch).eq("id", id);
+      if (error) throw error;
+      const { error: doctorError } = await client
+        .from("doctors")
+        .update({
+          acquisition_status: acquisitionStatusToDoctorStatus[status] ?? status,
+          updated_at: now,
+        })
+        .eq("id", doctorId)
+        .eq("organization_id", organizationId);
+      if (doctorError) throw doctorError;
+    },
+    onSuccess: () =>
+      invalidate(["doctor-acquisition-dashboard", "operations-dashboard", "executive-dashboard"]),
+  });
+
+  const logContactAttempt = useMutation({
+    mutationFn: async ({
+      doctorId,
+      channel,
+      outcome,
+      notes,
+    }: {
+      doctorId: string;
+      channel: string;
+      outcome: string;
+      notes?: string | null;
+    }) => {
+      if (!organizationId) throw new Error("Organisation is not available.");
+      const { error } = await getSupabaseClient().from("doctor_contact_attempts").insert({
+        organization_id: organizationId,
+        doctor_id: doctorId,
+        contact_channel: channel,
+        outcome,
+        notes: notes ?? null,
+      });
+      if (error) throw error;
+    },
+    onSuccess: () => invalidate(["doctor-acquisition-dashboard"]),
+  });
+
+  const assignAmbassador = useMutation({
+    mutationFn: async ({
+      doctorId,
+      ambassadorId,
+    }: {
+      doctorId: string;
+      ambassadorId: string;
+    }) => {
+      if (!organizationId) throw new Error("Organisation is not available.");
+      const client = getSupabaseClient();
+      const { data: existing, error: readError } = await client
+        .from("ambassador_referrals")
+        .select("id")
+        .eq("doctor_id", doctorId)
+        .limit(1);
+      if (readError) throw readError;
+      const referralId = Array.isArray(existing) && existing.length
+        ? (existing[0] as { id: string }).id
+        : null;
+      if (referralId) {
+        const { error } = await client
+          .from("ambassador_referrals")
+          .update({ ambassador_id: ambassadorId })
+          .eq("id", referralId);
+        if (error) throw error;
+      } else {
+        const { error } = await client.from("ambassador_referrals").insert({
+          ambassador_id: ambassadorId,
+          doctor_id: doctorId,
+          probation_status: "not_started",
+        });
+        if (error) throw error;
+      }
+    },
+    onSuccess: () => invalidate(["doctor-acquisition-dashboard", "ambassadors"]),
+  });
+
+  return { createPipelineEntry, updateAcquisitionStatus, logContactAttempt, assignAmbassador };
+}
+
+export type AmbassadorInput = {
+  firstName: string;
+  lastName: string;
+  email?: string | null;
+  phone?: string | null;
+  status?: "prospect" | "active" | "inactive" | "completed" | "terminated";
+  cohortId?: string | null;
+  startDate?: string | null;
+  currentTier?: string | null;
+};
+
+export function useAmbassadorMutations() {
+  const organizationState = useCurrentOrganisation();
+  const organizationId = organizationState.organizationId;
+  const invalidate = useOrgScopedInvalidate();
+
+  const createAmbassador = useMutation({
+    mutationFn: async (input: AmbassadorInput) => {
+      if (!organizationId) throw new Error("Organisation is not available.");
+      const { error } = await getSupabaseClient().from("ambassadors").insert({
+        first_name: input.firstName,
+        last_name: input.lastName,
+        email: input.email ?? null,
+        phone: input.phone ?? null,
+        status: input.status ?? "active",
+        cohort_id: input.cohortId ?? null,
+        start_date: input.startDate ?? null,
+        current_tier: input.currentTier ?? "Bronze",
+      });
+      if (error) throw error;
+    },
+    onSuccess: () => invalidate(["ambassadors"]),
+  });
+
+  const updateAmbassador = useMutation({
+    mutationFn: async ({
+      id,
+      patch,
+    }: {
+      id: string;
+      patch: Partial<AmbassadorInput>;
+    }) => {
+      if (!organizationId) throw new Error("Organisation is not available.");
+      const mapped: Record<string, unknown> = {};
+      if (patch.firstName !== undefined) mapped.first_name = patch.firstName;
+      if (patch.lastName !== undefined) mapped.last_name = patch.lastName;
+      if (patch.email !== undefined) mapped.email = patch.email;
+      if (patch.phone !== undefined) mapped.phone = patch.phone;
+      if (patch.status !== undefined) mapped.status = patch.status;
+      if (patch.cohortId !== undefined) mapped.cohort_id = patch.cohortId;
+      if (patch.startDate !== undefined) mapped.start_date = patch.startDate;
+      if (patch.currentTier !== undefined) mapped.current_tier = patch.currentTier;
+      if (!Object.keys(mapped).length) return;
+      const { error } = await getSupabaseClient()
+        .from("ambassadors")
+        .update(mapped)
+        .eq("id", id);
+      if (error) throw error;
+    },
+    onSuccess: () => invalidate(["ambassadors"]),
+  });
+
+  const deleteAmbassador = useMutation({
+    mutationFn: async (id: string) => {
+      if (!organizationId) throw new Error("Organisation is not available.");
+      const { error } = await getSupabaseClient().from("ambassadors").delete().eq("id", id);
+      if (error) throw error;
+    },
+    onSuccess: () => invalidate(["ambassadors"]),
+  });
+
+  return { createAmbassador, updateAmbassador, deleteAmbassador };
+}
+
 export type { OrganisationEmployee };

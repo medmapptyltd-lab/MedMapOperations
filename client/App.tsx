@@ -19,7 +19,6 @@ import Sales from "./pages/Sales";
 import CustomerOperations from "./pages/CustomerOperations";
 import Meetings from "./pages/Meetings";
 import KPIs from "./pages/KPIs";
-import ModulePage from "./pages/ModulePage";
 import NotFound from "./pages/NotFound";
 import Product from "./pages/Product";
 import Engineering from "./pages/Engineering";
@@ -48,10 +47,6 @@ const App = () => (
               />
               <Route path="/meetings" element={<Meetings />} />
               <Route path="/kpis" element={<KPIs />} />
-              <Route
-                path="/organization"
-                element={<ModulePage module="organization" />}
-              />
               <Route path="/ambassadors" element={<Ambassadors />} />
               <Route path="/sales" element={<Sales />} />
               <Route
@@ -61,16 +56,6 @@ const App = () => (
               <Route path="/product" element={<Product />} />
               <Route path="/engineering" element={<Engineering />} />
               <Route path="/security" element={<Security />} />
-              <Route
-                path="/technology"
-                element={<ModulePage module="technology" />}
-              />
-              <Route path="/risk" element={<ModulePage module="risk" />} />
-              <Route
-                path="/reports"
-                element={<ModulePage module="reports" />}
-              />
-              <Route path="/admin" element={<ModulePage module="admin" />} />
               {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
               <Route path="*" element={<NotFound />} />
             </Routes>
